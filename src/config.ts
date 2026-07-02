@@ -47,6 +47,23 @@ const ConfigSchema = z.object({
     bulkConfirmThreshold: z.coerce.number().int().positive().default(10),
     auditLogPath: z.string().optional(),
   }),
+  daemon: z
+    .object({
+      notifyEmail: z.string().email(),
+      smtp: z.object({
+        host: z.string().default("smtp.gmail.com"),
+        port: z.coerce.number().int().default(587),
+        user: z.string().min(1),
+        pass: z.string().min(1),
+      }),
+      ntfyTopic: z.string().optional(),
+      lowStockThreshold: z.coerce.number().int().min(0).default(5),
+      timezone: z.string().default("Asia/Kuala_Lumpur"),
+      autoReplyReviews: z.boolean().default(false),
+      autoAcceptUnpaidCancellations: z.boolean().default(false),
+      restockAlertDays: z.coerce.number().int().min(1).default(7),
+    })
+    .optional(),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -83,6 +100,23 @@ export function loadConfig(): Config {
       bulkConfirmThreshold: process.env.BULK_CONFIRM_THRESHOLD,
       auditLogPath: process.env.AUDIT_LOG_PATH || undefined,
     },
+    daemon: process.env.NOTIFY_EMAIL
+      ? {
+          notifyEmail: process.env.NOTIFY_EMAIL,
+          smtp: {
+            host: process.env.SMTP_HOST || "smtp.gmail.com",
+            port: process.env.SMTP_PORT || 587,
+            user: process.env.SMTP_USER || "",
+            pass: process.env.SMTP_PASS || "",
+          },
+          ntfyTopic: process.env.NTFY_TOPIC || undefined,
+          lowStockThreshold: process.env.LOW_STOCK_THRESHOLD || 5,
+          timezone: process.env.TIMEZONE || "Asia/Kuala_Lumpur",
+          autoReplyReviews: boolish.parse(process.env.AUTO_REPLY_REVIEWS),
+          autoAcceptUnpaidCancellations: boolish.parse(process.env.AUTO_ACCEPT_UNPAID_CANCELLATIONS),
+          restockAlertDays: process.env.RESTOCK_ALERT_DAYS || 7,
+        }
+      : undefined,
   };
 
   const parsed = ConfigSchema.safeParse(raw);

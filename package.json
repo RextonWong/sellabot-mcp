@@ -18,15 +18,21 @@
     "authorize:manual": "tsx scripts/authorize.ts --manual",
     "check-key": "tsx scripts/check-key.ts",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json",
-    "test": "node --import tsx --test \"test/**/*.test.ts\""
+    "test": "node --import tsx --test \"test/**/*.test.ts\"",
+    "daemon": "node dist/daemon.js",
+    "daemon:dev": "tsx src/daemon.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.18.0",
     "dotenv": "^16.4.7",
+    "node-cron": "^4.5.0",
+    "nodemailer": "^9.0.1",
     "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
+    "@types/node-cron": "^3.0.11",
+    "@types/nodemailer": "^8.0.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
   }

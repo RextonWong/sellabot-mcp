@@ -138,6 +138,9 @@ export class ShopeeClient {
       idempotent: method === "GET",
     });
 
+    if (typeof res.json === "string") {
+      this.throwForError({ error: res.json, message: res.json }, apiPath);
+    }
     const env = (res.json ?? {}) as ShopeeEnvelope;
     if (env.error) {
       this.throwForError(env, apiPath);

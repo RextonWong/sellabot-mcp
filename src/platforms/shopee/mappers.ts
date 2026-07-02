@@ -41,8 +41,11 @@ function money(amount: number | undefined, currency: string): Money | null {
   return { amount, currency };
 }
 
-function isoFromUnix(sec?: number): string {
-  return sec ? new Date(sec * 1000).toISOString() : new Date(0).toISOString();
+function isoFromUnix(sec?: number | string): string {
+  const n = Number(sec);
+  if (!Number.isFinite(n) || n <= 0) return new Date(0).toISOString();
+  const ms = n > 1e12 ? n : n * 1000;
+  return new Date(ms).toISOString();
 }
 
 function firstPrice(info?: { current_price?: number }[]): number | undefined {

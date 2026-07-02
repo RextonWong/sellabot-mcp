@@ -293,15 +293,17 @@ export class ShopeeAdapter implements Platform {
     const res = await this.client.call<{ conversations?: RawConversationRaw[] }>(
       PATHS.chatGetConversationList,
       {
-        query: {
+        method: "POST",
+        body: {
           direction: "latest",
           type: p.status === "unread" ? "unread" : "all",
           page_size: p.limit ?? 50,
         },
       },
     );
+    const list = (res.conversations ?? []) as RawConversationRaw[];
     return {
-      items: (res.conversations ?? []).map(map.mapConversation),
+      items: list.map(map.mapConversation),
       nextCursor: null,
     };
   }

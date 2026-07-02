@@ -41,16 +41,24 @@ class McpElicitor implements Elicitor {
         requestedSchema: {
           type: "object",
           properties: {
-            confirm: {
-              type: "boolean",
-              description: "Set true to approve and execute, false to cancel.",
+            decision: {
+              type: "string",
+              enum: ["yes", "no"],
+              description: "Choose 'yes' to approve and execute, or 'no' to cancel.",
             },
           },
-          required: ["confirm"],
+          required: ["decision"],
         },
       });
-      if (res.action !== "accept") return "declined";
-      return res.content?.confirm === true ? "approved" : "declined";
+      logger.info("elicitation response", { action: res.action, content: res.content });
+      if (res.action !== "accept") {
+        logger.info("elicitation not accepted", { action: res.action });
+        return "declined";
+      }
+      const answer = res.content?.decision;
+      return answer === "yes" || answer === true || answer === "true"
+        ? "approved"
+        : "declined";
     } catch (err) {
       logger.warn("elicitation confirm failed; treating as unsupported", {
         error: (err as Error).message,
