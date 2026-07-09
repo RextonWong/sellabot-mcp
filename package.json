@@ -8,7 +8,7 @@
     "sellabot-mcp": "dist/index.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "build": "tsc",
@@ -20,7 +20,9 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json",
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
     "daemon": "node dist/daemon.js",
-    "daemon:dev": "tsx src/daemon.ts"
+    "daemon:dev": "tsx src/daemon.ts",
+    "status": "tsx scripts/status.ts",
+    "export-tokens": "tsx scripts/export-tokens.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.18.0",

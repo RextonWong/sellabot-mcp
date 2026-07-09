@@ -21,6 +21,7 @@ const boolish = z
   .transform((v) => v?.toLowerCase() === "true");
 
 const ConfigSchema = z.object({
+  anthropicApiKey: z.string().optional(),
   shopee: z.object({
     partnerId: z.string().min(1, "SHOPEE_PARTNER_ID is required"),
     partnerKey: z.string().min(1, "SHOPEE_PARTNER_KEY is required"),
@@ -62,6 +63,18 @@ const ConfigSchema = z.object({
       autoReplyReviews: z.boolean().default(false),
       autoAcceptUnpaidCancellations: z.boolean().default(false),
       restockAlertDays: z.coerce.number().int().min(1).default(7),
+      // Phase 3 — Shopee promotions
+      autoCreateVoucher: z.boolean().default(false),
+      weeklyVoucherDiscount: z.coerce.number().int().min(1).max(90).default(5),
+      autoBoostListings: z.boolean().default(false),
+      boostTopN: z.coerce.number().int().min(1).default(3),
+      // Comma-separated product IDs to boost (overrides top-N if set)
+      boostProductIds: z.array(z.string()).default([]),
+      // Boost costs Shopee credits — must explicitly opt in to auto-execute
+      boostAutoExecute: z.boolean().default(false),
+      // Phase 3 — Ad generation
+      adGeneratorEnabled: z.boolean().default(true),
+      adProductsLimit: z.coerce.number().int().min(1).default(5),
     })
     .optional(),
 });
@@ -74,6 +87,7 @@ export function loadConfig(): Config {
   if (cached) return cached;
 
   const raw = {
+    anthropicApiKey: process.env.ANTHROPIC_API_KEY || undefined,
     shopee: {
       partnerId: process.env.SHOPEE_PARTNER_ID ?? "",
       partnerKey: process.env.SHOPEE_PARTNER_KEY ?? "",
@@ -115,6 +129,18 @@ export function loadConfig(): Config {
           autoReplyReviews: boolish.parse(process.env.AUTO_REPLY_REVIEWS),
           autoAcceptUnpaidCancellations: boolish.parse(process.env.AUTO_ACCEPT_UNPAID_CANCELLATIONS),
           restockAlertDays: process.env.RESTOCK_ALERT_DAYS || 7,
+          autoCreateVoucher: boolish.parse(process.env.AUTO_CREATE_VOUCHER),
+          weeklyVoucherDiscount: process.env.WEEKLY_VOUCHER_DISCOUNT || 5,
+          autoBoostListings: boolish.parse(process.env.AUTO_BOOST_LISTINGS),
+          boostTopN: process.env.BOOST_TOP_N || 3,
+          boostProductIds: process.env.BOOST_PRODUCT_IDS
+            ? process.env.BOOST_PRODUCT_IDS.split(",").map((s) => s.trim()).filter(Boolean)
+            : [],
+          boostAutoExecute: boolish.parse(process.env.BOOST_AUTO_EXECUTE),
+          adGeneratorEnabled: process.env.AD_GENERATOR_ENABLED !== undefined
+            ? boolish.parse(process.env.AD_GENERATOR_ENABLED)
+            : undefined,
+          adProductsLimit: process.env.AD_PRODUCTS_LIMIT || 5,
         }
       : undefined,
   };

@@ -1,0 +1,100 @@
+services:
+  - type: worker
+    name: sellabot-daemon
+    runtime: node
+    region: singapore
+    plan: starter
+    buildCommand: npm install && npm run build
+    startCommand: node dist/daemon.js
+    envVars:
+      # ── Shopee Open Platform ─────────────────────────────────────────
+      - key: SHOPEE_PARTNER_ID
+        sync: false
+      - key: SHOPEE_PARTNER_KEY
+        sync: false
+      - key: SHOPEE_REGION
+        value: MY
+      - key: SHOPEE_ENV
+        value: production
+      - key: SHOPEE_SHOP_ID
+        sync: false
+      - key: SHOPEE_REDIRECT_URL
+        value: http://localhost:8787/callback
+
+      # ── Token storage ────────────────────────────────────────────────
+      - key: TOKEN_DB_PATH
+        value: /data/tokens.db
+      - key: TOKEN_ENCRYPTION_KEY
+        sync: false
+      # On first deploy, paste the JSON from `npm run export-tokens` here:
+      - key: SHOPEE_SEED_TOKEN
+        sync: false
+
+      # ── Server behavior ──────────────────────────────────────────────
+      - key: LOG_LEVEL
+        value: info
+      - key: REQUEST_TIMEOUT_MS
+        value: "15000"
+      - key: MAX_RETRIES
+        value: "3"
+
+      # ── Consent & audit ──────────────────────────────────────────────
+      - key: AUTO_CONFIRM_TIER
+        value: none
+      - key: AUDIT_LOG_PATH
+        value: /data/audit.log
+
+      # ── Daemon / Notifications ───────────────────────────────────────
+      - key: NOTIFY_EMAIL
+        sync: false
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: NTFY_TOPIC
+        sync: false
+      - key: LOW_STOCK_THRESHOLD
+        value: "5"
+      - key: TIMEZONE
+        value: Asia/Kuala_Lumpur
+      - key: AUTO_REPLY_REVIEWS
+        value: "false"
+      - key: AUTO_ACCEPT_UNPAID_CANCELLATIONS
+        value: "false"
+      - key: RESTOCK_ALERT_DAYS
+        value: "7"
+
+      # ── Routine state (on persistent disk) ──────────────────────────
+      - key: ROUTINE_STATE_PATH
+        value: /data/routine-state.json
+
+      # ── Phase 3 — Shopee promotions ──────────────────────────────────
+      - key: AUTO_CREATE_VOUCHER
+        value: "false"
+      - key: WEEKLY_VOUCHER_DISCOUNT
+        value: "5"
+      - key: AUTO_BOOST_LISTINGS
+        value: "false"
+      - key: BOOST_TOP_N
+        value: "3"
+      - key: BOOST_PRODUCT_IDS
+        value: ""
+      - key: BOOST_AUTO_EXECUTE
+        value: "false"
+
+      # ── Phase 3 — Ad generator ───────────────────────────────────────
+      - key: AD_GENERATOR_ENABLED
+        value: "true"
+      - key: AD_PRODUCTS_LIMIT
+        value: "5"
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+    disk:
+      name: sellabot-data
+      mountPath: /data
+      sizeGB: 1

@@ -3,9 +3,10 @@ import { loadConfig } from "./config.js";
 import { logger } from "./core/logger.js";
 import type { Platform } from "./core/platform.js";
 import { runOrderMonitor } from "./routines/order-monitor.js";
-
 import { runMorningBriefing } from "./routines/morning-briefing.js";
 import { runEveningReport } from "./routines/evening-report.js";
+import { runPromotions } from "./routines/promotions.js";
+import { runAdGenerator } from "./routines/ad-generator.js";
 import {
   bootstrapAdapter,
   bootstrapAudit,
@@ -109,8 +110,46 @@ cron.schedule("0 12 * * *", () => {
   });
 });
 
+// Weekly: Sunday at 01:00 UTC = 9:00 AM MYT
+// Runs promotions (voucher + boost) then the weekly ad pack
+cron.schedule("0 1 * * 0", () => {
+  if (daemonCfg.autoCreateVoucher || daemonCfg.autoBoostListings) {
+    withErrorBoundary("promotions", async () => {
+      logger.info("running weekly promotions");
+      const result = await runPromotions(
+        adapter,
+        {
+          autoCreateVoucher: daemonCfg.autoCreateVoucher,
+          weeklyVoucherDiscount: daemonCfg.weeklyVoucherDiscount,
+          autoBoostListings: daemonCfg.autoBoostListings,
+          boostTopN: daemonCfg.boostTopN,
+          boostProductIds: daemonCfg.boostProductIds,
+          boostAutoExecute: daemonCfg.boostAutoExecute,
+          timezone: tz,
+        },
+        audit,
+      );
+      state.promotions.lastRunAt = new Date().toISOString();
+      await notifier.dispatch(result);
+    });
+  }
+
+  if (daemonCfg.adGeneratorEnabled) {
+    withErrorBoundary("adGenerator", async () => {
+      logger.info("running weekly ad generator");
+      const { result } = await runAdGenerator(adapter, {
+        limit: daemonCfg.adProductsLimit,
+        anthropicApiKey: config.anthropicApiKey,
+      });
+      state.adGenerator.lastRunAt = new Date().toISOString();
+      await notifier.dispatch(result);
+    });
+  }
+});
+
 // ── Startup ───────────────────────────────────────────────────────────────────
 
+const adMode = config.anthropicApiKey ? "AI (Claude Haiku)" : "templates";
 console.error(`
 ╔══════════════════════════════════════════════╗
 ║         SELLABOT DAEMON — RUNNING           ║
@@ -118,14 +157,22 @@ console.error(`
 ║  Timezone:  ${tz.padEnd(32)}║
 ║  Email:     ${daemonCfg.notifyEmail.padEnd(32)}║
 ║  Push:      ${(daemonCfg.ntfyTopic ? `ntfy.sh/${daemonCfg.ntfyTopic}` : "disabled").padEnd(32)}║
-║  Auto-reply reviews: ${(daemonCfg.autoReplyReviews ? "ON" : "OFF").padEnd(23)}║
+╠══════════════════════════════════════════════╣
+║  PHASE 2                                    ║
+║  Auto-reply reviews:  ${(daemonCfg.autoReplyReviews ? "ON" : "OFF").padEnd(22)}║
 ║  Auto-accept unpaid:  ${(daemonCfg.autoAcceptUnpaidCancellations ? "ON" : "OFF").padEnd(22)}║
-║  Restock alert:  ${(`${daemonCfg.restockAlertDays} days`).padEnd(27)}║
+║  Restock alert:       ${(`${daemonCfg.restockAlertDays} days`).padEnd(22)}║
+╠══════════════════════════════════════════════╣
+║  PHASE 3                                    ║
+║  Auto-voucher:        ${(daemonCfg.autoCreateVoucher ? `ON (${daemonCfg.weeklyVoucherDiscount}% off)` : "OFF").padEnd(22)}║
+║  Auto-boost:          ${(daemonCfg.autoBoostListings ? `ON (top ${daemonCfg.boostTopN})` : "OFF").padEnd(22)}║
+║  Ad generator:        ${(daemonCfg.adGeneratorEnabled ? `ON — ${adMode}` : "OFF").padEnd(22)}║
 ╠══════════════════════════════════════════════╣
 ║  SCHEDULES (times in ${tz.slice(0, 10).padEnd(10)})          ║
 ║  • Order monitor:    every 30 min (8-22h)   ║
 ║  • Morning briefing: daily 8:00 AM          ║
 ║  • Evening report:   daily 8:00 PM          ║
+║  • Promotions + Ads: Sunday 9:00 AM         ║
 ╠══════════════════════════════════════════════╣
 ║  Press Ctrl+C to stop                       ║
 ╚══════════════════════════════════════════════╝

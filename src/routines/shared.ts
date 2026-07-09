@@ -9,7 +9,7 @@ import { HttpClient } from "../core/http.js";
 import { logger } from "../core/logger.js";
 import type { Money } from "../core/models.js";
 import type { Platform } from "../core/platform.js";
-import { SqliteTokenStore } from "../core/token-store.js";
+import { SqliteTokenStore, type TokenRecord } from "../core/token-store.js";
 import { createShopeeAdapter } from "../platforms/shopee/index.js";
 
 // ── Routine result ────────────────────────────────────────────────────────────
@@ -36,18 +36,29 @@ export function bootstrapAdapter(config: Config): Platform {
     config.tokenStore.dbPath,
     config.tokenStore.encryptionKey,
   );
+
+  // Seed token from env var on first boot (e.g. Render where DB starts empty)
+  const shopId = config.shopee.shopId;
+  const seedJson = process.env.SHOPEE_SEED_TOKEN;
+  if (shopId && seedJson && !tokens.get("shopee", shopId)) {
+    try {
+      tokens.set("shopee", shopId, JSON.parse(seedJson) as TokenRecord);
+      logger.info("seeded shopee token from SHOPEE_SEED_TOKEN");
+    } catch (err) {
+      logger.warn("SHOPEE_SEED_TOKEN could not be parsed — skipping seed", {
+        error: (err as Error).message,
+      });
+    }
+  }
+
   return createShopeeAdapter(config, http, tokens);
 }
 
 // ── State persistence ─────────────────────────────────────────────────────────
 
-const STATE_PATH = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "..",
-  ".data",
-  "routine-state.json",
-);
+const STATE_PATH =
+  process.env.ROUTINE_STATE_PATH ??
+  resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", ".data", "routine-state.json");
 
 export interface RoutineStateEntry {
   lastRunAt: string | null;
@@ -60,6 +71,8 @@ export interface RoutineState {
   messageMonitor: RoutineStateEntry;
   morningBriefing: RoutineStateEntry;
   eveningReport: RoutineStateEntry;
+  promotions: RoutineStateEntry;
+  adGenerator: RoutineStateEntry;
 }
 
 const EMPTY_ENTRY: RoutineStateEntry = {
@@ -74,12 +87,16 @@ function defaultState(): RoutineState {
     messageMonitor: { ...EMPTY_ENTRY },
     morningBriefing: { ...EMPTY_ENTRY },
     eveningReport: { ...EMPTY_ENTRY },
+    promotions: { ...EMPTY_ENTRY },
+    adGenerator: { ...EMPTY_ENTRY },
   };
 }
 
 export function loadState(): RoutineState {
   try {
-    return JSON.parse(readFileSync(STATE_PATH, "utf-8")) as RoutineState;
+    const loaded = JSON.parse(readFileSync(STATE_PATH, "utf-8")) as Partial<RoutineState>;
+    // Merge with defaults so new keys added to RoutineState are always present
+    return { ...defaultState(), ...loaded };
   } catch {
     return defaultState();
   }
