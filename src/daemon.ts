@@ -1,5 +1,6 @@
 import cron from "node-cron";
 import { loadConfig } from "./config.js";
+import { createTelegramBot } from "./telegram/bot.js";
 import { logger } from "./core/logger.js";
 import type { Platform } from "./core/platform.js";
 import { runOrderMonitor } from "./routines/order-monitor.js";
@@ -147,6 +148,19 @@ cron.schedule("0 1 * * 0", () => {
   }
 });
 
+// ── Telegram bot ─────────────────────────────────────────────────────────────
+
+if (daemonCfg.telegramBotToken && daemonCfg.telegramChatId) {
+  const bot = createTelegramBot(
+    daemonCfg.telegramBotToken,
+    daemonCfg.telegramChatId,
+    adapter,
+    audit,
+    config,
+  );
+  bot.start({ onStart: () => logger.info("telegram bot polling started") });
+}
+
 // ── Startup ───────────────────────────────────────────────────────────────────
 
 const adMode = config.anthropicApiKey ? "AI (Claude Haiku)" : "templates";
@@ -157,6 +171,7 @@ console.error(`
 ║  Timezone:  ${tz.padEnd(32)}║
 ║  Email:     ${daemonCfg.notifyEmail.padEnd(32)}║
 ║  Push:      ${(daemonCfg.ntfyTopic ? `ntfy.sh/${daemonCfg.ntfyTopic}` : "disabled").padEnd(32)}║
+║  Telegram:  ${(daemonCfg.telegramBotToken ? "enabled" : "disabled").padEnd(32)}║
 ╠══════════════════════════════════════════════╣
 ║  PHASE 2                                    ║
 ║  Auto-reply reviews:  ${(daemonCfg.autoReplyReviews ? "ON" : "OFF").padEnd(22)}║

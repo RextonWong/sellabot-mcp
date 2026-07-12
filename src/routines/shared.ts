@@ -112,11 +112,15 @@ export function saveState(state: RoutineState): void {
 export class NotificationDispatcher {
   private mailer: Transporter | null = null;
   private ntfyTopic: string | null = null;
+  private telegramBotToken: string | null = null;
+  private telegramChatId: string | null = null;
   private toEmail: string;
 
   constructor(config: NonNullable<Config["daemon"]>) {
     this.toEmail = config.notifyEmail;
     this.ntfyTopic = config.ntfyTopic ?? null;
+    this.telegramBotToken = config.telegramBotToken ?? null;
+    this.telegramChatId = config.telegramChatId ?? null;
 
     this.mailer = createTransport({
       host: config.smtp.host,
@@ -159,6 +163,27 @@ export class NotificationDispatcher {
     }
   }
 
+  async sendTelegram(text: string): Promise<void> {
+    if (!this.telegramBotToken || !this.telegramChatId) return;
+    try {
+      await fetch(
+        `https://api.telegram.org/bot${this.telegramBotToken}/sendMessage`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: this.telegramChatId,
+            text: text.slice(0, 4096),
+            parse_mode: "HTML",
+          }),
+        },
+      );
+      logger.info("telegram notification sent");
+    } catch (err) {
+      logger.error("telegram send failed", { error: (err as Error).message });
+    }
+  }
+
   async dispatch(result: RoutineResult): Promise<void> {
     const prefix = result.urgent ? "[URGENT] " : "";
     const subject = `${prefix}Sellabot: ${result.name}`;
@@ -166,6 +191,7 @@ export class NotificationDispatcher {
     await Promise.allSettled([
       this.sendEmail(subject, result.summary),
       this.sendPush(subject, result.summary.slice(0, 500), result.urgent),
+      this.sendTelegram(`<b>${subject}</b>\n\n${result.summary}`),
     ]);
   }
 }
