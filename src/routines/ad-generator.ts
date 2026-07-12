@@ -1,12 +1,14 @@
 import { logger } from "../core/logger.js";
 import type { Product } from "../core/models.js";
 import type { Platform } from "../core/platform.js";
+import type { InstagramClient } from "../platforms/instagram/client.js";
 import { formatMoney, type RoutineResult } from "./shared.js";
 
 export interface AdCopySet {
   productId: string;
   productName: string;
   price: string;
+  imageUrl: string | null;
   shopee: string;
   facebook: string;
   instagram: string;
@@ -135,7 +137,12 @@ async function generateAdCopy(product: Product, anthropicApiKey?: string): Promi
 
 export async function runAdGenerator(
   adapter: Platform,
-  opts: { limit: number; anthropicApiKey?: string },
+  opts: {
+    limit: number;
+    anthropicApiKey?: string;
+    instagramClient?: InstagramClient;
+    autoPostInstagram?: boolean;
+  },
 ): Promise<{ copies: AdCopySet[]; result: RoutineResult }> {
   const products = await adapter.getProducts({ status: "live", limit: opts.limit });
   const mode = opts.anthropicApiKey ? "AI-generated (Claude Haiku)" : "template-based";
@@ -147,24 +154,49 @@ export async function runAdGenerator(
       productId: product.productId,
       productName: product.name,
       price: formatMoney(product.price),
+      imageUrl: product.images[0] ?? null,
       ...copy,
     });
   }
 
-  const summary = formatAdPackEmail(copies, mode);
+  // ── Instagram auto-posting ─────────────────────────────────────────────────
+  const igResults: Array<{ name: string; ok: boolean; error?: string }> = [];
+  if (opts.autoPostInstagram && opts.instagramClient) {
+    for (const copy of copies) {
+      if (!copy.imageUrl) {
+        igResults.push({ name: copy.productName, ok: false, error: "no image URL" });
+        continue;
+      }
+      try {
+        await opts.instagramClient.postPhoto(copy.imageUrl, copy.instagram);
+        igResults.push({ name: copy.productName, ok: true });
+        logger.info("posted to Instagram", { product: copy.productName });
+      } catch (err) {
+        const error = (err as Error).message;
+        igResults.push({ name: copy.productName, ok: false, error });
+        logger.error("Instagram post failed", { product: copy.productName, error });
+      }
+    }
+  }
+
+  const summary = formatAdPackEmail(copies, mode, igResults);
 
   return {
     copies,
     result: {
       name: "Weekly Ad Pack",
       summary,
-      urgent: false,
-      data: { products: copies.length, mode },
+      urgent: igResults.some((r) => !r.ok && r.error !== "no image URL"),
+      data: { products: copies.length, mode, instagramPosted: igResults.filter((r) => r.ok).length },
     },
   };
 }
 
-export function formatAdPackEmail(copies: AdCopySet[], mode: string): string {
+export function formatAdPackEmail(
+  copies: AdCopySet[],
+  mode: string,
+  igResults: Array<{ name: string; ok: boolean; error?: string }> = [],
+): string {
   const border = "═".repeat(50);
   const divider = "─".repeat(50);
   const lines: string[] = [
@@ -191,6 +223,17 @@ export function formatAdPackEmail(copies: AdCopySet[], mode: string): string {
     lines.push("");
     lines.push("🛍️ SHOPEE LISTING REFRESH:");
     lines.push(copy.shopee);
+    lines.push("");
+    lines.push(border);
+    lines.push("");
+  }
+
+  if (igResults.length > 0) {
+    lines.push("INSTAGRAM AUTO-POST RESULTS");
+    lines.push(divider);
+    for (const r of igResults) {
+      lines.push(r.ok ? `✅ ${r.name}` : `❌ ${r.name}: ${r.error ?? "unknown error"}`);
+    }
     lines.push("");
     lines.push(border);
     lines.push("");

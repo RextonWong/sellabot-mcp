@@ -1,5 +1,6 @@
 import cron from "node-cron";
 import { loadConfig } from "./config.js";
+import { InstagramClient } from "./platforms/instagram/client.js";
 import { createTelegramBot } from "./telegram/bot.js";
 import { logger } from "./core/logger.js";
 import type { Platform } from "./core/platform.js";
@@ -33,6 +34,11 @@ const tz = daemonCfg.timezone;
 const adapter: Platform = bootstrapAdapter(config);
 const audit = bootstrapAudit(config);
 const notifier = new NotificationDispatcher(daemonCfg);
+
+const instagramClient =
+  daemonCfg.instagramAccessToken && daemonCfg.instagramUserId
+    ? new InstagramClient(daemonCfg.instagramAccessToken, daemonCfg.instagramUserId)
+    : undefined;
 let state: RoutineState = loadState();
 let running = false;
 
@@ -141,6 +147,8 @@ cron.schedule("0 1 * * 0", () => {
       const { result } = await runAdGenerator(adapter, {
         limit: daemonCfg.adProductsLimit,
         anthropicApiKey: config.anthropicApiKey,
+        instagramClient,
+        autoPostInstagram: daemonCfg.autoPostInstagram,
       });
       state.adGenerator.lastRunAt = new Date().toISOString();
       await notifier.dispatch(result);
@@ -182,6 +190,7 @@ console.error(`
 ║  Auto-voucher:        ${(daemonCfg.autoCreateVoucher ? `ON (${daemonCfg.weeklyVoucherDiscount}% off)` : "OFF").padEnd(22)}║
 ║  Auto-boost:          ${(daemonCfg.autoBoostListings ? `ON (top ${daemonCfg.boostTopN})` : "OFF").padEnd(22)}║
 ║  Ad generator:        ${(daemonCfg.adGeneratorEnabled ? `ON — ${adMode}` : "OFF").padEnd(22)}║
+║  Instagram posting:   ${(daemonCfg.autoPostInstagram && instagramClient ? "ON" : "OFF").padEnd(22)}║
 ╠══════════════════════════════════════════════╣
 ║  SCHEDULES (times in ${tz.slice(0, 10).padEnd(10)})          ║
 ║  • Order monitor:    every 30 min (8-22h)   ║

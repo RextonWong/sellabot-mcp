@@ -77,6 +77,10 @@ const ConfigSchema = z.object({
       // Phase 3 — Ad generation
       adGeneratorEnabled: z.boolean().default(true),
       adProductsLimit: z.coerce.number().int().min(1).default(5),
+      // Phase 4 — Instagram auto-posting
+      instagramAccessToken: z.string().optional(),
+      instagramUserId: z.string().optional(),
+      autoPostInstagram: z.boolean().default(false),
     })
     .optional(),
 });
@@ -145,6 +149,9 @@ export function loadConfig(): Config {
             ? boolish.parse(process.env.AD_GENERATOR_ENABLED)
             : undefined,
           adProductsLimit: process.env.AD_PRODUCTS_LIMIT || 5,
+          instagramAccessToken: process.env.INSTAGRAM_ACCESS_TOKEN || undefined,
+          instagramUserId: process.env.INSTAGRAM_USER_ID || undefined,
+          autoPostInstagram: boolish.parse(process.env.AUTO_POST_INSTAGRAM),
         }
       : undefined,
   };
