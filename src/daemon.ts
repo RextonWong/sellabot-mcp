@@ -159,10 +159,11 @@ cron.schedule("0 1 * * 0", () => {
 
 // ── Manager Agent + Telegram bot ─────────────────────────────────────────────
 
+const agentModel = process.env.AGENT_MODEL ?? "claude-sonnet-5";
 const managerAgent = config.anthropicApiKey
   ? new ManagerAgent(
       config.anthropicApiKey,
-      "claude-haiku-4-5-20251001",
+      agentModel,
       adapter,
       audit,
       config,
@@ -170,7 +171,7 @@ const managerAgent = config.anthropicApiKey
   : undefined;
 
 if (managerAgent) {
-  logger.info("manager agent ready", { model: "claude-haiku-4-5-20251001" });
+  logger.info("manager agent ready", { model: agentModel });
 }
 
 if (daemonCfg.telegramBotToken && daemonCfg.telegramChatId) {
@@ -196,7 +197,7 @@ console.error(`
 ║  Email:     ${daemonCfg.notifyEmail.padEnd(32)}║
 ║  Push:      ${(daemonCfg.ntfyTopic ? `ntfy.sh/${daemonCfg.ntfyTopic}` : "disabled").padEnd(32)}║
 ║  Telegram:  ${(daemonCfg.telegramBotToken ? "enabled" : "disabled").padEnd(32)}║
-║  Manager Agent: ${(managerAgent ? "ON (free-text chat)" : "OFF — set ANTHROPIC_API_KEY").padEnd(28)}║
+║  Manager Agent: ${(managerAgent ? `ON — ${agentModel}` : "OFF — set ANTHROPIC_API_KEY").padEnd(28)}║
 ╠══════════════════════════════════════════════╣
 ║  PHASE 2                                    ║
 ║  Auto-reply reviews:  ${(daemonCfg.autoReplyReviews ? "ON" : "OFF").padEnd(22)}║
