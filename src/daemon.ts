@@ -1,6 +1,7 @@
 import cron from "node-cron";
 import { loadConfig } from "./config.js";
 import { InstagramClient } from "./platforms/instagram/client.js";
+import { ManagerAgent } from "./agents/manager.js";
 import { createTelegramBot } from "./telegram/bot.js";
 import { logger } from "./core/logger.js";
 import type { Platform } from "./core/platform.js";
@@ -156,7 +157,21 @@ cron.schedule("0 1 * * 0", () => {
   }
 });
 
-// ── Telegram bot ─────────────────────────────────────────────────────────────
+// ── Manager Agent + Telegram bot ─────────────────────────────────────────────
+
+const managerAgent = config.anthropicApiKey
+  ? new ManagerAgent(
+      config.anthropicApiKey,
+      "claude-haiku-4-5-20251001",
+      adapter,
+      audit,
+      config,
+    )
+  : undefined;
+
+if (managerAgent) {
+  logger.info("manager agent ready", { model: "claude-haiku-4-5-20251001" });
+}
 
 if (daemonCfg.telegramBotToken && daemonCfg.telegramChatId) {
   const bot = createTelegramBot(
@@ -165,6 +180,7 @@ if (daemonCfg.telegramBotToken && daemonCfg.telegramChatId) {
     adapter,
     audit,
     config,
+    managerAgent,
   );
   bot.start({ onStart: () => logger.info("telegram bot polling started") });
 }
@@ -180,6 +196,7 @@ console.error(`
 ║  Email:     ${daemonCfg.notifyEmail.padEnd(32)}║
 ║  Push:      ${(daemonCfg.ntfyTopic ? `ntfy.sh/${daemonCfg.ntfyTopic}` : "disabled").padEnd(32)}║
 ║  Telegram:  ${(daemonCfg.telegramBotToken ? "enabled" : "disabled").padEnd(32)}║
+║  Manager Agent: ${(managerAgent ? "ON (free-text chat)" : "OFF — set ANTHROPIC_API_KEY").padEnd(28)}║
 ╠══════════════════════════════════════════════╣
 ║  PHASE 2                                    ║
 ║  Auto-reply reviews:  ${(daemonCfg.autoReplyReviews ? "ON" : "OFF").padEnd(22)}║
