@@ -30,8 +30,13 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: "get_inventory",
+    description: "Get stock levels for ALL live products — full inventory list. Use this when the seller wants to see all products and their stock. Use get_low_stock only for items specifically running low.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
     name: "get_low_stock",
-    description: "List products running low on stock.",
+    description: "List only products running low on stock (below threshold).",
     input_schema: {
       type: "object",
       properties: {
@@ -131,6 +136,24 @@ export async function executeTool(
         (o) => `#${o.orderId} — ${o.buyerName} — ${formatMoney(o.total)} — ${o.status}`,
       );
       return `${page.items.length} order(s):\n${lines.join("\n")}`;
+    }
+
+    case "get_inventory": {
+      const allProducts = [];
+      let cursor: string | undefined;
+      do {
+        const page = await adapter.getProducts({ status: "live", limit: 50, cursor });
+        allProducts.push(...page.items);
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor && allProducts.length < 200);
+
+      if (allProducts.length === 0) return "No live products found.";
+      const lines = allProducts.map((p) => {
+        const stock = p.stock ?? 0;
+        const flag = stock === 0 ? " ❌ OUT OF STOCK" : stock <= 5 ? " ⚠️ LOW" : "";
+        return `${p.name}: ${stock}${flag}`;
+      });
+      return `Inventory — ${allProducts.length} product(s):\n${lines.join("\n")}`;
     }
 
     case "get_low_stock": {

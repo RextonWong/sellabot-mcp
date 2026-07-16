@@ -34,7 +34,7 @@ export interface ActivityEntry {
 }
 
 const SHOPEE_TOOLS = new Set([
-  "get_orders", "get_low_stock", "get_messages", "get_reviews",
+  "get_orders", "get_inventory", "get_low_stock", "get_messages", "get_reviews",
   "get_returns", "get_shop_performance", "run_briefing", "run_report",
 ]);
 

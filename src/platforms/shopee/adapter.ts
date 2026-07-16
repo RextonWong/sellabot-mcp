@@ -347,32 +347,42 @@ export class ShopeeAdapter implements Platform {
 
   async getOrders(p: GetOrdersParams): Promise<Page<OrderSummary>> {
     const now = Math.floor(Date.now() / 1000);
-    const statusMap: Record<string, string> = {
+
+    // to_ship maps to TWO Shopee statuses — query both and merge
+    const singleStatusMap: Record<string, string> = {
       unpaid: "UNPAID",
-      to_ship: "READY_TO_SHIP",
       shipped: "SHIPPED",
       completed: "COMPLETED",
       cancelled: "CANCELLED",
     };
-    const list = await this.client.call<{
-      order_list?: { order_sn: string }[];
-      next_cursor?: string;
-      more?: boolean;
-    }>(PATHS.orderGetList, {
-      query: {
-        time_range_field: "create_time",
-        time_from: now - FIFTEEN_DAYS_SEC,
-        time_to: now,
-        page_size: p.limit ?? 50,
-        cursor: p.cursor,
-        order_status: p.status ? statusMap[p.status] : undefined,
-      },
-    });
-    const sns = (list.order_list ?? []).map((o) => o.order_sn);
-    const details = await this.orderDetails(sns);
+    const shopeeStatuses: Array<string | undefined> =
+      p.status === "to_ship"
+        ? ["READY_TO_SHIP", "PROCESSED"]
+        : [p.status ? singleStatusMap[p.status] : undefined];
+
+    const allSns = new Set<string>();
+    for (const orderStatus of shopeeStatuses) {
+      const list = await this.client.call<{
+        order_list?: { order_sn: string }[];
+        next_cursor?: string;
+        more?: boolean;
+      }>(PATHS.orderGetList, {
+        query: {
+          time_range_field: "create_time",
+          time_from: now - FIFTEEN_DAYS_SEC,
+          time_to: now,
+          page_size: p.limit ?? 50,
+          cursor: p.cursor,
+          order_status: orderStatus,
+        },
+      });
+      for (const o of list.order_list ?? []) allSns.add(o.order_sn);
+    }
+
+    const details = await this.orderDetails([...allSns].slice(0, p.limit ?? 50));
     return {
       items: details.map((o) => map.mapOrderSummary(o, this.currency)),
-      nextCursor: list.more ? (list.next_cursor ?? null) : null,
+      nextCursor: null,
     };
   }
 
