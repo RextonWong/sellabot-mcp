@@ -254,4 +254,8 @@ export interface Platform {
   // shop
   getShopInfo(): Promise<ShopInfo>;
   getShopPerformance(p: PerformanceParams): Promise<ShopPerformance>;
+
+  // listing creation helpers (optional — not all platforms support)
+  uploadImage?(imageBase64: string): Promise<string>;
+  searchCategories?(keyword: string): Promise<Array<{ id: string; name: string; path: string }>>;
 }

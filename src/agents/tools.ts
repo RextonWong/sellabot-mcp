@@ -85,6 +85,63 @@ export const TOOL_DEFINITIONS = [
     input_schema: { type: "object", properties: {} },
   },
 
+  // ── Listing creation ──
+  {
+    name: "upload_product_image",
+    description: "Upload the product photo the seller just sent to Shopee's image hosting. Returns an image_id to include in create_listing. Call this FIRST when creating a new listing.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "search_categories",
+    description: "Search Shopee product categories by keyword to find the right category_id for a new listing.",
+    input_schema: {
+      type: "object",
+      properties: {
+        keyword: { type: "string", description: "Product type keyword, e.g. 'earphones', 'clothes', 'electronics', 'bag'" },
+      },
+      required: ["keyword"],
+    },
+  },
+  {
+    name: "draft_listing",
+    description: "Show the seller a formatted preview of the listing before it goes live. Does NOT create anything. Always call this to get seller approval before create_listing.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Product name/title (concise, benefit-led)" },
+        description: { type: "string", description: "Full product description with key features" },
+        category_id: { type: "string", description: "Shopee category ID from search_categories" },
+        category_path: { type: "string", description: "Human-readable category path for the preview" },
+        price: { type: "number", description: "Price in MYR" },
+        stock: { type: "number", description: "Initial stock quantity" },
+        weight_kg: { type: "number", description: "Product weight in kg (Shopee requires this)" },
+        image_ids: {
+          type: "array",
+          items: { type: "string" },
+          description: "Image IDs returned by upload_product_image",
+        },
+      },
+      required: ["name", "description", "category_id", "price", "stock", "image_ids"],
+    },
+  },
+  {
+    name: "create_listing",
+    description: "Post the product listing live on Shopee. Only call this AFTER the seller has explicitly said yes to the draft_listing preview. SENSITIVE — changes the live shop immediately.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        description: { type: "string" },
+        category_id: { type: "string" },
+        price: { type: "number", description: "Price in MYR" },
+        stock: { type: "number" },
+        weight_kg: { type: "number" },
+        image_ids: { type: "array", items: { type: "string" } },
+      },
+      required: ["name", "description", "category_id", "price", "stock", "image_ids"],
+    },
+  },
+
   // ── Marketing Agent ──
   {
     name: "propose_voucher",
@@ -114,12 +171,17 @@ export const TOOL_DEFINITIONS = [
 
 // ── Tool implementations ───────────────────────────────────────────────────────
 
+export interface ToolContext {
+  pendingImageBase64?: string;
+}
+
 export async function executeTool(
   name: string,
   input: Record<string, unknown>,
   adapter: Platform,
   audit: AuditLog,
   config: Config,
+  context: ToolContext = {},
 ): Promise<string> {
   const daemonCfg = config.daemon!;
   const tz = daemonCfg.timezone;
@@ -250,6 +312,71 @@ export async function executeTool(
         ``,
         `Reply "yes create the voucher" to confirm, or adjust the terms.`,
       ].join("\n");
+    }
+
+    case "upload_product_image": {
+      const img = context.pendingImageBase64;
+      if (!img) return "No product image is pending. Please send a photo first.";
+      if (!adapter.uploadImage) return "Image upload is not supported on this platform.";
+      const imageId = await adapter.uploadImage(img);
+      return `Image uploaded. image_id: ${imageId}`;
+    }
+
+    case "search_categories": {
+      const keyword = input.keyword as string;
+      if (!adapter.searchCategories) return "Category search is not supported on this platform.";
+      const cats = await adapter.searchCategories(keyword);
+      if (cats.length === 0) return `No Shopee categories found for "${keyword}". Try a broader keyword (e.g. "electronics", "fashion", "health").`;
+      const lines = cats.map((c) => `ID ${c.id}: ${c.path}`);
+      return `Shopee categories matching "${keyword}":\n${lines.join("\n")}`;
+    }
+
+    case "draft_listing": {
+      const p = input as {
+        name: string; description: string; category_id: string; category_path?: string;
+        price: number; stock: number; weight_kg?: number; image_ids: string[];
+      };
+      const lines = [
+        "=== LISTING PREVIEW ===",
+        `Name: ${p.name}`,
+        `Category: ${p.category_path ?? `ID ${p.category_id}`}`,
+        `Price: RM${p.price.toFixed(2)}`,
+        `Stock: ${p.stock} unit(s)`,
+        `Weight: ${p.weight_kg ? `${p.weight_kg} kg` : "0.5 kg (default)"}`,
+        `Images: ${p.image_ids.length} uploaded`,
+        "",
+        "Description:",
+        p.description,
+        "",
+        "========================",
+        'Reply "yes post it" to publish, or tell me what to change.',
+      ];
+      return lines.join("\n");
+    }
+
+    case "create_listing": {
+      const p = input as {
+        name: string; description: string; category_id: string;
+        price: number; stock: number; weight_kg?: number; image_ids: string[];
+      };
+      const currency = daemonCfg.notifyEmail ? "MYR" : "MYR"; // shop is MY
+      const product = await adapter.createListing({
+        name: p.name,
+        description: p.description,
+        categoryId: p.category_id,
+        price: { amount: p.price, currency },
+        stock: p.stock,
+        images: p.image_ids,
+        weightKg: p.weight_kg,
+      });
+      audit.record({
+        tool: "create_listing",
+        tier: "SENSITIVE",
+        effect: `Created listing "${p.name}" at RM${p.price.toFixed(2)} with ${p.stock} stock`,
+        decision: "approved",
+        outcome: "executed",
+      });
+      return `Listing posted! Product ID: ${product.productId} — "${product.name}" is now live on Shopee.`;
     }
 
     case "generate_ad_copy": {

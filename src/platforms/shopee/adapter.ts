@@ -140,6 +140,14 @@ export class ShopeeAdapter implements Platform {
   }
 
   async createListing(p: CreateListingParams): Promise<Product> {
+    // Auto-fetch enabled logistics channels — Shopee requires at least one
+    const chRes = await this.client.call<{
+      logistics_channel_list?: Array<{ logistic_id: number; enabled: boolean }>;
+    }>(PATHS.logisticsGetChannelList);
+    const logisticsList = (chRes.logistics_channel_list ?? [])
+      .filter((c) => c.enabled)
+      .map((c) => ({ logistic_id: c.logistic_id, enabled: true }));
+
     const res = await this.client.call<{ item_id?: number }>(PATHS.productAddItem, {
       method: "POST",
       body: {
@@ -149,7 +157,9 @@ export class ShopeeAdapter implements Platform {
         original_price: p.price.amount,
         seller_stock: [{ stock: p.stock }],
         image: { image_id_list: p.images },
-        weight: p.weightKg,
+        weight: p.weightKg ?? 0.5,
+        item_status: "NORMAL",
+        logistics: logisticsList,
         dimension: p.dimensions
           ? {
               package_length: p.dimensions.lengthCm,
@@ -164,6 +174,42 @@ export class ShopeeAdapter implements Platform {
     const [item] = await this.itemBaseInfo([itemId]);
     if (!item) throw new NotFoundError(`Created item ${itemId} could not be re-read.`);
     return map.mapItem(item, this.currency);
+  }
+
+  async uploadImage(imageBase64: string): Promise<string> {
+    const buffer = Buffer.from(imageBase64, "base64");
+    return this.client.uploadImageBuffer(buffer, "image/jpeg");
+  }
+
+  async searchCategories(keyword: string): Promise<Array<{ id: string; name: string; path: string }>> {
+    const res = await this.client.call<{
+      category_list?: Array<{
+        category_id: number;
+        parent_category_id: number;
+        category_name: string;
+        has_children: boolean;
+      }>;
+    }>(PATHS.productGetCategory, { query: { language: "en" } });
+
+    const all = res.category_list ?? [];
+    const nameMap = new Map(all.map((c) => [c.category_id, c.category_name]));
+    const kw = keyword.toLowerCase();
+
+    return all
+      .filter((c) => {
+        const name = c.category_name.toLowerCase();
+        const parentName = nameMap.get(c.parent_category_id)?.toLowerCase() ?? "";
+        return name.includes(kw) || parentName.includes(kw);
+      })
+      .slice(0, 12)
+      .map((c) => {
+        const parent = nameMap.get(c.parent_category_id);
+        return {
+          id: String(c.category_id),
+          name: c.category_name,
+          path: parent ? `${parent} > ${c.category_name}` : c.category_name,
+        };
+      });
   }
 
   async updateListing(p: UpdateListingParams): Promise<Product> {

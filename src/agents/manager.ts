@@ -12,7 +12,7 @@ import { logger } from "../core/logger.js";
 import type { Platform } from "../core/platform.js";
 import type { AuditLog } from "../core/audit.js";
 import type { Config } from "../config.js";
-import { TOOL_DEFINITIONS, executeTool } from "./tools.js";
+import { TOOL_DEFINITIONS, executeTool, type ToolContext } from "./tools.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -36,20 +36,31 @@ export interface ActivityEntry {
 const SHOPEE_TOOLS = new Set([
   "get_orders", "get_inventory", "get_low_stock", "get_messages", "get_reviews",
   "get_returns", "get_shop_performance", "run_briefing", "run_report",
+  "upload_product_image", "search_categories", "draft_listing", "create_listing",
 ]);
 
 const SYSTEM_PROMPT = `You are Sellabot, an AI assistant managing a Shopee seller's store in Malaysia.
 
 You have two groups of capabilities:
-- Shopee Agent: check orders, stock, messages, reviews, returns, shop performance, run briefings
+- Shopee Agent: check orders, stock, messages, reviews, returns, shop performance, run briefings, create product listings
 - Marketing Agent: propose vouchers, generate ad copy for social media
+
+LISTING CREATION (when seller sends a product photo):
+1. Call upload_product_image to upload the image to Shopee's CDN.
+2. Analyse the product from the image and the seller's caption — figure out name, key features, selling points.
+3. Call search_categories with a keyword matching the product type to find the right category_id.
+4. Call draft_listing with ALL fields: name, description, category_id, price (from seller message), stock (ask if not given), weight in kg.
+   - If the seller gave a price in the caption, use it. Otherwise ask.
+   - Default weight to 0.5 kg if seller doesn't mention it, but include it in the preview.
+5. Wait for the seller's explicit yes/confirm.
+6. Call create_listing to post it live.
 
 Rules:
 - Use tools to fetch real data before answering. Never make up numbers.
 - Be concise — this is Telegram, not email. Keep replies short and scannable.
 - Use plain text only (no markdown **bold** or _italic_ — Telegram plain text mode).
-- For SENSITIVE actions (creating a voucher, replying to buyers): always show a preview and ask for confirmation first. Never execute without explicit seller approval.
-- If the seller says "yes", "confirm", "do it", "go ahead" — check conversation history to understand what they're confirming.
+- For SENSITIVE actions (listing, voucher, replies): always show a preview and ask for confirmation first. Never execute without explicit seller approval.
+- If the seller says "yes", "confirm", "do it", "go ahead", "post it" — check conversation history to understand what they're confirming.
 - If unsure what the seller wants, ask a short clarifying question.`;
 
 // ── Manager Agent ─────────────────────────────────────────────────────────────
@@ -59,6 +70,7 @@ export class ManagerAgent {
   private readonly maxHistory = 20; // turns (pairs)
   readonly activityLog: ActivityEntry[] = [];
   private readonly maxActivityLog = 50;
+  private pendingImageBase64: string | null = null;
 
   constructor(
     private readonly apiKey: string,
@@ -67,6 +79,31 @@ export class ManagerAgent {
     private readonly audit: AuditLog,
     private readonly config: Config,
   ) {}
+
+  async chatWithImage(userMessage: string, imageBase64: string, mimeType: string): Promise<string> {
+    this.pendingImageBase64 = imageBase64;
+    // Build a multimodal first message
+    const content = [
+      {
+        type: "image" as const,
+        source: { type: "base64" as const, media_type: mimeType as "image/jpeg", data: imageBase64 },
+      },
+      {
+        type: "text" as const,
+        text: userMessage || "I want to list this product on Shopee. Please analyse the photo and help me create a listing.",
+      },
+    ];
+    this.history.push({ role: "user", content: content as unknown as ContentBlock[] });
+    if (this.history.length > this.maxHistory * 2) {
+      this.history = this.history.slice(-this.maxHistory * 2);
+    }
+    try {
+      return await this.runAgentLoop();
+    } catch (err) {
+      logger.error("manager agent error", { error: (err as Error).message });
+      return `Sorry, something went wrong: ${(err as Error).message}`;
+    }
+  }
 
   async chat(userMessage: string): Promise<string> {
     // Add user message to history
@@ -98,8 +135,13 @@ export class ManagerAgent {
       for (const toolUse of toolUses) {
         logger.info("manager agent: tool call", { tool: toolUse.name, input: toolUse.input });
         let result: string;
+        const toolCtx: ToolContext = { pendingImageBase64: this.pendingImageBase64 ?? undefined };
         try {
-          result = await executeTool(toolUse.name, toolUse.input, this.adapter, this.audit, this.config);
+          result = await executeTool(toolUse.name, toolUse.input, this.adapter, this.audit, this.config, toolCtx);
+          // Clear pending image after a successful listing creation
+          if (toolUse.name === "create_listing" && !result.startsWith("Error")) {
+            this.pendingImageBase64 = null;
+          }
         } catch (err) {
           result = `Error: ${(err as Error).message}`;
         }

@@ -11,6 +11,8 @@ const HELP_TEXT = `<b>Sellabot Commands</b>
 
 Just talk to me naturally — e.g. "any orders to ship?" or "how are sales this week?"
 
+To create a Shopee listing: send a photo with a caption like "RM25, wireless earbuds, 50 in stock"
+
 Quick commands:
 /status — daemon health &amp; last run times
 /activity — recent agent actions
@@ -184,6 +186,38 @@ export function createTelegramBot(
       if (e.summary) lines.push(`  ${e.summary}`);
     }
     await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+  });
+
+  // Photo → AI listing creation
+  bot.on("message:photo", async (ctx) => {
+    if (!managerAgent) {
+      await ctx.reply("Set ANTHROPIC_API_KEY to enable AI product listing from photos.");
+      return;
+    }
+    const photo = ctx.message.photo.at(-1)!; // largest available size
+    const caption = ctx.message.caption ?? "";
+
+    const thinkingMsg = await ctx.reply("Analysing your product...");
+    try {
+      const file = await ctx.api.getFile(photo.file_id);
+      const fileUrl = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+      const imgRes = await fetch(fileUrl);
+      if (!imgRes.ok) throw new Error(`Photo download failed: HTTP ${imgRes.status}`);
+      const buffer = Buffer.from(await imgRes.arrayBuffer());
+      const base64 = buffer.toString("base64");
+
+      await ctx.replyWithChatAction("typing");
+      const reply = await managerAgent.chatWithImage(
+        caption || "I want to list this product on Shopee. Analyse the photo and help me create a listing.",
+        base64,
+        "image/jpeg",
+      );
+      await ctx.api.deleteMessage(ctx.chat.id, thinkingMsg.message_id).catch(() => {});
+      await ctx.reply(reply.slice(0, 4000));
+    } catch (err) {
+      await ctx.api.deleteMessage(ctx.chat.id, thinkingMsg.message_id).catch(() => {});
+      await ctx.reply(`Error: ${(err as Error).message}`);
+    }
   });
 
   // Free-text → Manager Agent (if available) or fallback message

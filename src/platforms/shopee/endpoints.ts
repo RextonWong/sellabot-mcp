@@ -56,6 +56,15 @@ export const PATHS = {
   // vouchers
   voucherGetList: "/api/v2/voucher/get_voucher_list",
   voucherAdd: "/api/v2/voucher/add_voucher",
+
+  // media / image hosting
+  mediaUploadImage: "/api/v2/media_space/upload_image",
+
+  // category tree
+  productGetCategory: "/api/v2/product/get_category",
+
+  // logistics channels (needed when creating a new listing)
+  logisticsGetChannelList: "/api/v2/logistics/get_channel_list",
 } as const;
 
 export type ApiPath = (typeof PATHS)[keyof typeof PATHS];

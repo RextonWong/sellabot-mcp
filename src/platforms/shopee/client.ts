@@ -148,6 +148,48 @@ export class ShopeeClient {
     return (env.response ?? env) as T;
   }
 
+  /**
+   * Upload a raw image buffer to Shopee's media space.
+   * Returns the Shopee image_id to use in add_item / update_item calls.
+   * Uses FormData so it bypasses the JSON client — auth/signing still handled here.
+   */
+  async uploadImageBuffer(buffer: Buffer, mimeType: string): Promise<string> {
+    const apiPath = "/api/v2/media_space/upload_image";
+    const accessToken = await this.accessToken();
+    const timestamp = nowSec();
+    const sign = signShop({
+      partnerId: this.cfg.partnerId,
+      partnerKey: this.cfg.partnerKey,
+      apiPath,
+      timestamp,
+      accessToken,
+      shopId: this.cfg.shopId,
+    });
+
+    const params = new URLSearchParams({
+      partner_id: this.cfg.partnerId,
+      timestamp: String(timestamp),
+      access_token: accessToken,
+      shop_id: this.cfg.shopId,
+      sign,
+    });
+
+    const formData = new FormData();
+    formData.append("image", new Blob([buffer], { type: mimeType }), "product.jpg");
+
+    const res = await fetch(`${this.cfg.host}${apiPath}?${params}`, {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!res.ok) throw new PlatformError(`Image upload HTTP ${res.status}`);
+    const data = (await res.json()) as ShopeeEnvelope;
+    if (data.error) this.throwForError(data, apiPath);
+    const imageId = (data.response as { image_id?: string } | undefined)?.image_id;
+    if (!imageId) throw new PlatformError("Image upload: no image_id returned");
+    return imageId;
+  }
+
   private throwForError(env: ShopeeEnvelope, apiPath: string): never {
     const code = env.error ?? "unknown";
     const msg = env.message || code;
