@@ -179,7 +179,7 @@ export class ShopeeClient {
     formData.append("image", new Blob([new Uint8Array(buffer)], { type: mimeType }), "product.jpg");
 
     const url = `${this.cfg.host}${apiPath}?${params}`;
-    logger.debug("uploading image to shopee", { url: url.split("?")[0] });
+    logger.info("uploading image to shopee", { path: apiPath, host: this.cfg.host });
 
     const res = await fetch(url, { method: "POST", body: formData });
 
@@ -187,13 +187,15 @@ export class ShopeeClient {
     try {
       data = (await res.json()) as ShopeeEnvelope;
     } catch {
+      logger.error("shopee image upload: non-JSON response", { status: res.status });
       throw new PlatformError(`Image upload: HTTP ${res.status} — non-JSON response`);
     }
 
-    logger.debug("shopee image upload response", {
+    logger.info("shopee image upload response", {
       status: res.status,
-      error: data.error,
-      message: data.message,
+      error: data.error || "(none)",
+      message: data.message || "(none)",
+      hasResponse: !!data.response,
     });
 
     if (!res.ok || data.error) this.throwForError(data, apiPath);

@@ -142,8 +142,14 @@ export class ManagerAgent {
           if (toolUse.name === "create_listing" && !result.startsWith("Error")) {
             this.pendingImageBase64 = null;
           }
+          logger.info("manager agent: tool result", {
+            tool: toolUse.name,
+            hasPendingImage: this.pendingImageBase64 !== null,
+            result: result.slice(0, 300),
+          });
         } catch (err) {
           result = `Error: ${(err as Error).message}`;
+          logger.error("manager agent: tool threw", { tool: toolUse.name, error: (err as Error).message });
         }
 
         toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: result });
