@@ -192,24 +192,37 @@ export class ShopeeAdapter implements Platform {
     }>(PATHS.productGetCategory, { query: { language: "en" } });
 
     const all = res.category_list ?? [];
+    if (all.length === 0) {
+      return [{ id: "0", name: "Unknown (Shopee returned no categories)", path: "Please specify a category ID manually" }];
+    }
+
     const nameMap = new Map(all.map((c) => [c.category_id, c.category_name]));
     const kw = keyword.toLowerCase();
 
-    return all
-      .filter((c) => {
-        const name = c.category_name.toLowerCase();
-        const parentName = nameMap.get(c.parent_category_id)?.toLowerCase() ?? "";
-        return name.includes(kw) || parentName.includes(kw);
-      })
-      .slice(0, 12)
-      .map((c) => {
-        const parent = nameMap.get(c.parent_category_id);
-        return {
-          id: String(c.category_id),
-          name: c.category_name,
-          path: parent ? `${parent} > ${c.category_name}` : c.category_name,
-        };
-      });
+    const toEntry = (c: { category_id: number; parent_category_id: number; category_name: string }) => {
+      const parent = nameMap.get(c.parent_category_id);
+      return {
+        id: String(c.category_id),
+        name: c.category_name,
+        path: parent && c.parent_category_id !== 0 ? `${parent} > ${c.category_name}` : c.category_name,
+      };
+    };
+
+    // Try keyword match first
+    const matched = all.filter((c) => {
+      const name = c.category_name.toLowerCase();
+      const parentName = nameMap.get(c.parent_category_id)?.toLowerCase() ?? "";
+      return name.includes(kw) || parentName.includes(kw);
+    });
+
+    if (matched.length > 0) return matched.slice(0, 12).map(toEntry);
+
+    // No keyword match — return top-level categories so Claude can navigate
+    const topLevel = all.filter((c) => c.parent_category_id === 0).slice(0, 15);
+    return topLevel.map((c) => ({
+      ...toEntry(c),
+      name: `${c.category_name} (no match for "${keyword}" — browse subcategories)`,
+    }));
   }
 
   async updateListing(p: UpdateListingParams): Promise<Product> {

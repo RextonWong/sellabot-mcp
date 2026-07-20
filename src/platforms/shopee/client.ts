@@ -149,12 +149,12 @@ export class ShopeeClient {
   }
 
   /**
-   * Upload a raw image buffer to Shopee's media space.
+   * Upload a raw image buffer to Shopee via product/upload_image.
    * Returns the Shopee image_id to use in add_item / update_item calls.
-   * Uses FormData so it bypasses the JSON client — auth/signing still handled here.
+   * Uses FormData (multipart) — auth/signing still handled here.
    */
   async uploadImageBuffer(buffer: Buffer, mimeType: string): Promise<string> {
-    const apiPath = "/api/v2/media_space/upload_image";
+    const apiPath = "/api/v2/product/upload_image";
     const accessToken = await this.accessToken();
     const timestamp = nowSec();
     const sign = signShop({
@@ -175,18 +175,30 @@ export class ShopeeClient {
     });
 
     const formData = new FormData();
-    formData.append("image", new Blob([buffer], { type: mimeType }), "product.jpg");
+    // Shopee expects the field named "image" with a filename
+    formData.append("image", new Blob([new Uint8Array(buffer)], { type: mimeType }), "product.jpg");
 
-    const res = await fetch(`${this.cfg.host}${apiPath}?${params}`, {
-      method: "POST",
-      body: formData,
+    const url = `${this.cfg.host}${apiPath}?${params}`;
+    logger.debug("uploading image to shopee", { url: url.split("?")[0] });
+
+    const res = await fetch(url, { method: "POST", body: formData });
+
+    let data: ShopeeEnvelope;
+    try {
+      data = (await res.json()) as ShopeeEnvelope;
+    } catch {
+      throw new PlatformError(`Image upload: HTTP ${res.status} — non-JSON response`);
+    }
+
+    logger.debug("shopee image upload response", {
+      status: res.status,
+      error: data.error,
+      message: data.message,
     });
 
-    if (!res.ok) throw new PlatformError(`Image upload HTTP ${res.status}`);
-    const data = (await res.json()) as ShopeeEnvelope;
-    if (data.error) this.throwForError(data, apiPath);
+    if (!res.ok || data.error) this.throwForError(data, apiPath);
     const imageId = (data.response as { image_id?: string } | undefined)?.image_id;
-    if (!imageId) throw new PlatformError("Image upload: no image_id returned");
+    if (!imageId) throw new PlatformError("Image upload: no image_id in response");
     return imageId;
   }
 
