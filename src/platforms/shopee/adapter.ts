@@ -199,19 +199,20 @@ export class ShopeeAdapter implements Platform {
     const nameMap = new Map(all.map((c) => [c.category_id, c.category_name]));
     const kw = keyword.toLowerCase();
 
-    const toEntry = (c: { category_id: number; parent_category_id: number; category_name: string }) => {
+    const toEntry = (c: { category_id: number; parent_category_id: number; category_name?: string }) => {
+      const catName = c.category_name ?? "";
       const parent = nameMap.get(c.parent_category_id);
       return {
         id: String(c.category_id),
-        name: c.category_name,
-        path: parent && c.parent_category_id !== 0 ? `${parent} > ${c.category_name}` : c.category_name,
+        name: catName,
+        path: parent && c.parent_category_id !== 0 ? `${parent} > ${catName}` : catName,
       };
     };
 
     // Try keyword match first
     const matched = all.filter((c) => {
-      const name = c.category_name.toLowerCase();
-      const parentName = nameMap.get(c.parent_category_id)?.toLowerCase() ?? "";
+      const name = (c.category_name ?? "").toLowerCase();
+      const parentName = (nameMap.get(c.parent_category_id) ?? "").toLowerCase();
       return name.includes(kw) || parentName.includes(kw);
     });
 
@@ -221,7 +222,7 @@ export class ShopeeAdapter implements Platform {
     const topLevel = all.filter((c) => c.parent_category_id === 0).slice(0, 15);
     return topLevel.map((c) => ({
       ...toEntry(c),
-      name: `${c.category_name} (no match for "${keyword}" — browse subcategories)`,
+      name: `${c.category_name ?? "Unknown"} (no match for "${keyword}" — pick a subcategory)`,
     }));
   }
 

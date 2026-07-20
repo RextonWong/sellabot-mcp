@@ -154,7 +154,7 @@ export class ShopeeClient {
    * Uses FormData (multipart) — auth/signing still handled here.
    */
   async uploadImageBuffer(buffer: Buffer, mimeType: string): Promise<string> {
-    const apiPath = "/api/v2/product/upload_image";
+    const apiPath = "/api/v2/media_space/upload_image";
     const accessToken = await this.accessToken();
     const timestamp = nowSec();
     const sign = signShop({

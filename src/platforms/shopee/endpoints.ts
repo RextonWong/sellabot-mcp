@@ -57,8 +57,8 @@ export const PATHS = {
   voucherGetList: "/api/v2/voucher/get_voucher_list",
   voucherAdd: "/api/v2/voucher/add_voucher",
 
-  // product image upload (multipart POST, field name: "image")
-  productUploadImage: "/api/v2/product/upload_image",
+  // image upload via Shopee media space (multipart POST, field name: "image")
+  mediaSpaceUploadImage: "/api/v2/media_space/upload_image",
 
   // category tree
   productGetCategory: "/api/v2/product/get_category",
