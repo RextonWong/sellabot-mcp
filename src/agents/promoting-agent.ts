@@ -25,7 +25,9 @@ WORKFLOW — you must get explicit confirmation before spending or committing:
 1. When asked to promote, first inspect (list_products / get_shop_performance) if you need to choose a product.
 2. PROPOSE the concrete action in plain text (which product, what boost or voucher terms) and ask the seller to confirm. STOP there.
 3. Only when the task tells you the seller confirmed, call boost_listing or create_voucher.
-Never boost or create a voucher without an explicit confirmation relayed from the seller.`;
+Never boost or create a voucher without an explicit confirmation relayed from the seller.
+
+EXCEPTION — SCHEDULED TASKS: If a task explicitly says it is a pre-approved SCHEDULED task, the seller already approved it when they set up the recurring schedule. Execute the actions directly (e.g. find the product with list_products, then boost_listing) without asking for confirmation, and report what you did.`;
 
 export class PromotingAgent {
   private history: Message[] = [];
@@ -43,7 +45,15 @@ export class PromotingAgent {
   async handle(task: string): Promise<string> {
     this.history.push({ role: "user", content: task });
     this.trim();
+    return this.loop(this.history);
+  }
 
+  /** Run a one-off task in an isolated history (used by the scheduler). */
+  async runIsolated(task: string): Promise<string> {
+    return this.loop([{ role: "user", content: task }]);
+  }
+
+  private loop(history: Message[]): Promise<string> {
     return runAgentLoop(
       {
         apiKey: this.apiKey,
@@ -54,7 +64,7 @@ export class PromotingAgent {
         executeTool: (name, input) => executeTool(name, input, this.adapter, this.audit, this.config),
         onTool: (name, _input, result) => this.tracker.record("promoting", name, result),
       },
-      this.history,
+      history,
     );
   }
 

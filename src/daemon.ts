@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { loadConfig } from "./config.js";
 import { InstagramClient } from "./platforms/instagram/client.js";
 import { ManagerAgent } from "./agents/manager.js";
+import { TaskScheduler } from "./routines/scheduler.js";
 import { createTelegramBot } from "./telegram/bot.js";
 import { logger } from "./core/logger.js";
 import type { Platform } from "./core/platform.js";
@@ -172,6 +173,22 @@ const managerAgent = config.anthropicApiKey
 
 if (managerAgent) {
   logger.info("manager agent ready", { model: agentModel });
+}
+
+// User-defined recurring tasks (e.g. "boost these products every day").
+// Persists to disk and reports results to Telegram.
+const scheduler = managerAgent
+  ? new TaskScheduler(
+      tz,
+      (agent, instruction) => managerAgent.runScheduledTask(agent, instruction),
+      (text) => notifier.sendTelegram(text),
+    )
+  : undefined;
+
+if (managerAgent && scheduler) {
+  managerAgent.attachScheduler(scheduler);
+  scheduler.registerAll();
+  logger.info("task scheduler ready", { tasks: scheduler.list().length });
 }
 
 if (daemonCfg.telegramBotToken && daemonCfg.telegramChatId) {

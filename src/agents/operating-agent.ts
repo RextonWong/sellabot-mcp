@@ -29,7 +29,9 @@ CREATING A LISTING (when a product photo is provided):
 5. Return the draft preview and STOP — wait for the seller to confirm via the Manager.
 6. Only when the task tells you the seller confirmed, call create_listing with the SAME values.
 
-Report the exact error if a tool fails — do not silently retry the same call.`;
+Report the exact error if a tool fails — do not silently retry the same call.
+
+SCHEDULED TASKS: If a task explicitly says it is a pre-approved SCHEDULED task, run it directly and report the result — do not ask for confirmation.`;
 
 export class OperatingAgent {
   private history: Message[] = [];
@@ -64,7 +66,15 @@ export class OperatingAgent {
       this.history.push({ role: "user", content: task });
     }
     this.trim();
+    return this.loop(this.history);
+  }
 
+  /** Run a one-off task in an isolated history (used by the scheduler). */
+  async runIsolated(task: string): Promise<string> {
+    return this.loop([{ role: "user", content: task }]);
+  }
+
+  private loop(history: Message[]): Promise<string> {
     return runAgentLoop(
       {
         apiKey: this.apiKey,
@@ -82,7 +92,7 @@ export class OperatingAgent {
         },
         onTool: (name, _input, result) => this.tracker.record("operating", name, result),
       },
-      this.history,
+      history,
     );
   }
 

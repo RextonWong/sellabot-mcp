@@ -13,11 +13,13 @@ Just talk to me naturally — e.g. "any orders to ship?", "how are sales this we
 
 To create a Shopee listing: send a photo with a caption like "RM25, wireless earbuds, 50 in stock"
 To promote: "boost the water dispenser" or "make a 10% voucher for this weekend"
+To schedule: "boost my water dispenser every day at 9am"
 
 Quick commands:
 /status — daemon health &amp; last run times
 /agents — the agents working for you
 /activity — recent agent actions
+/schedules — your recurring scheduled tasks
 /briefing — run morning briefing now
 /report — run evening report now
 /orders — orders waiting to ship
@@ -191,6 +193,27 @@ export function createTelegramBot(
       const label = agentLabel[e.agent] ?? e.agent;
       lines.push(`${label} [${t}] ${e.tool}`);
       if (e.summary) lines.push(`  ${e.summary}`);
+    }
+    await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+  });
+
+  bot.command("schedules", async (ctx) => {
+    if (!managerAgent) {
+      await ctx.reply("Scheduling needs the Manager Agent (set ANTHROPIC_API_KEY).");
+      return;
+    }
+    const tasks = managerAgent.listSchedules();
+    if (tasks.length === 0) {
+      await ctx.reply('No scheduled tasks yet. Try: "boost my water dispenser every day at 9am"');
+      return;
+    }
+    const lines = ["<b>Scheduled Tasks</b>\n"];
+    for (const t of tasks) {
+      const last = t.lastRunAt ? localTime(t.lastRunAt, tz) : "never";
+      const icon = t.agent === "promoting" ? "📣" : "🛒";
+      lines.push(`${icon} ${t.description}`);
+      lines.push(`   cron: ${t.cron} · last run: ${last}`);
+      lines.push(`   to cancel: say "cancel schedule ${t.id}"`);
     }
     await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
   });
