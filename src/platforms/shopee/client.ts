@@ -195,11 +195,20 @@ export class ShopeeClient {
       status: res.status,
       error: data.error || "(none)",
       message: data.message || "(none)",
-      hasResponse: !!data.response,
+      // log full response so we can see the actual field names
+      response: JSON.stringify(data.response ?? data).slice(0, 500),
     });
 
     if (!res.ok || data.error) this.throwForError(data, apiPath);
-    const imageId = (data.response as { image_id?: string } | undefined)?.image_id;
+
+    // Shopee may nest image_id directly in response or inside image_info
+    const resp = (data.response ?? data) as Record<string, unknown>;
+    const imageId =
+      (resp.image_id as string | undefined) ||
+      ((resp.image_info as { image_id?: string } | undefined)?.image_id) ||
+      (resp.image_url as string | undefined); // some versions return URL only
+
+    logger.info("shopee image upload: extracted id", { imageId: imageId ?? "(not found)" });
     if (!imageId) throw new PlatformError("Image upload: no image_id in response");
     return imageId;
   }
