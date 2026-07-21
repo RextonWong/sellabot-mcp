@@ -114,7 +114,10 @@ export const TOOL_DEFINITIONS = [
         category_path: { type: "string", description: "Human-readable category path for the preview" },
         price: { type: "number", description: "Price in MYR" },
         stock: { type: "number", description: "Initial stock quantity" },
-        weight_kg: { type: "number", description: "Product weight in kg (Shopee requires this)" },
+        weight_kg: { type: "number", description: "Shipping weight in kg. Estimate from the product (e.g. a water dispenser ~12kg, a phone case ~0.1kg)." },
+        length_cm: { type: "number", description: "Package length in cm. Estimate from product size." },
+        width_cm: { type: "number", description: "Package width in cm. Estimate from product size." },
+        height_cm: { type: "number", description: "Package height in cm. Estimate from product size." },
         brand: { type: "string", description: "Brand name (e.g. 'Cuckoo'). Use 'No Brand' if the product has no brand." },
         image_ids: {
           type: "array",
@@ -137,6 +140,9 @@ export const TOOL_DEFINITIONS = [
         price: { type: "number", description: "Price in MYR" },
         stock: { type: "number" },
         weight_kg: { type: "number" },
+        length_cm: { type: "number" },
+        width_cm: { type: "number" },
+        height_cm: { type: "number" },
         brand: { type: "string", description: "Brand name. Use 'No Brand' if none." },
         image_ids: { type: "array", items: { type: "string" } },
       },
@@ -336,8 +342,13 @@ export async function executeTool(
     case "draft_listing": {
       const p = input as {
         name: string; description: string; category_id: string; category_path?: string;
-        price: number; stock: number; weight_kg?: number; brand?: string; image_ids: string[];
+        price: number; stock: number; weight_kg?: number; brand?: string;
+        length_cm?: number; width_cm?: number; height_cm?: number; image_ids: string[];
       };
+      const dims =
+        p.length_cm && p.width_cm && p.height_cm
+          ? `${p.length_cm} x ${p.width_cm} x ${p.height_cm} cm`
+          : "20 x 20 x 20 cm (default)";
       const lines = [
         "=== LISTING PREVIEW ===",
         `Name: ${p.name}`,
@@ -346,6 +357,7 @@ export async function executeTool(
         `Price: RM${p.price.toFixed(2)}`,
         `Stock: ${p.stock} unit(s)`,
         `Weight: ${p.weight_kg ? `${p.weight_kg} kg` : "0.5 kg (default)"}`,
+        `Parcel size: ${dims}`,
         `Images: ${p.image_ids.length} uploaded`,
         "",
         "Description:",
@@ -360,9 +372,14 @@ export async function executeTool(
     case "create_listing": {
       const p = input as {
         name: string; description: string; category_id: string;
-        price: number; stock: number; weight_kg?: number; brand?: string; image_ids: string[];
+        price: number; stock: number; weight_kg?: number; brand?: string;
+        length_cm?: number; width_cm?: number; height_cm?: number; image_ids: string[];
       };
       const currency = daemonCfg.notifyEmail ? "MYR" : "MYR"; // shop is MY
+      const dimensions =
+        p.length_cm && p.width_cm && p.height_cm
+          ? { lengthCm: p.length_cm, widthCm: p.width_cm, heightCm: p.height_cm }
+          : undefined;
       const product = await adapter.createListing({
         name: p.name,
         description: p.description,
@@ -372,6 +389,7 @@ export async function executeTool(
         images: p.image_ids,
         weightKg: p.weight_kg,
         brand: { name: p.brand || "No Brand" },
+        dimensions,
       });
       audit.record({
         tool: "create_listing",

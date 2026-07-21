@@ -166,13 +166,13 @@ export class ShopeeAdapter implements Platform {
           original_brand_name: p.brand?.name || "No Brand",
         },
         logistics: logisticsList,
-        dimension: p.dimensions
-          ? {
-              package_length: p.dimensions.lengthCm,
-              package_width: p.dimensions.widthCm,
-              package_height: p.dimensions.heightCm,
-            }
-          : undefined,
+        // Shopee requires package dimensions ("Parcel size is required"). Default
+        // to a small parcel when the seller doesn't specify.
+        dimension: {
+          package_length: p.dimensions?.lengthCm ?? 20,
+          package_width: p.dimensions?.widthCm ?? 20,
+          package_height: p.dimensions?.heightCm ?? 20,
+        },
         ...(p.attributes ?? {}),
       },
     });
