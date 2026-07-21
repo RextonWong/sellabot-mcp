@@ -7,6 +7,7 @@
  * base info + model list), that stitching happens here.
  */
 import { NotFoundError, UnsupportedOperationError } from "../../core/errors.js";
+import { logger } from "../../core/logger.js";
 import type {
   BulkResult,
   Cancellation,
@@ -183,46 +184,61 @@ export class ShopeeAdapter implements Platform {
 
   async searchCategories(keyword: string): Promise<Array<{ id: string; name: string; path: string }>> {
     const res = await this.client.call<{
-      category_list?: Array<{
-        category_id: number;
-        parent_category_id: number;
-        category_name: string;
-        has_children: boolean;
-      }>;
+      category_list?: Array<Record<string, unknown>>;
     }>(PATHS.productGetCategory, { query: { language: "en" } });
 
-    const all = res.category_list ?? [];
-    if (all.length === 0) {
-      return [{ id: "0", name: "Unknown (Shopee returned no categories)", path: "Please specify a category ID manually" }];
+    const raw = res.category_list ?? [];
+
+    // Log the first entry so we can see the actual field names Shopee uses
+    if (raw.length > 0) {
+      logger.info("shopee category sample", { first: JSON.stringify(raw[0]).slice(0, 300) });
     }
 
-    const nameMap = new Map(all.map((c) => [c.category_id, c.category_name]));
+    // Shopee may use category_name or display_category_name depending on region/version
+    const getName = (c: Record<string, unknown>): string =>
+      (c.display_category_name as string) ||
+      (c.category_name as string) ||
+      (c.category_name_en as string) ||
+      "";
+
+    const all = raw.map((c) => ({
+      category_id: c.category_id as number,
+      parent_category_id: c.parent_category_id as number,
+      has_children: c.has_children as boolean,
+      name: getName(c),
+    }));
+
+    if (all.length === 0) {
+      return [{ id: "0", name: "No categories (API returned empty list)", path: "Specify category_id manually" }];
+    }
+
+    const nameMap = new Map(all.map((c) => [c.category_id, c.name]));
     const kw = keyword.toLowerCase();
 
-    const toEntry = (c: { category_id: number; parent_category_id: number; category_name?: string }) => {
-      const catName = c.category_name ?? "";
-      const parent = nameMap.get(c.parent_category_id);
+    const toEntry = (c: { category_id: number; parent_category_id: number; name: string }) => {
+      const parent = c.parent_category_id !== 0 ? nameMap.get(c.parent_category_id) : undefined;
       return {
         id: String(c.category_id),
-        name: catName,
-        path: parent && c.parent_category_id !== 0 ? `${parent} > ${catName}` : catName,
+        name: c.name,
+        path: parent ? `${parent} > ${c.name}` : c.name,
       };
     };
 
-    // Try keyword match first
-    const matched = all.filter((c) => {
-      const name = (c.category_name ?? "").toLowerCase();
+    // Only leaf categories — Shopee rejects parent categories on add_item
+    const leaves = all.filter((c) => !c.has_children);
+
+    const matched = leaves.filter((c) => {
+      const name = c.name.toLowerCase();
       const parentName = (nameMap.get(c.parent_category_id) ?? "").toLowerCase();
       return name.includes(kw) || parentName.includes(kw);
     });
 
     if (matched.length > 0) return matched.slice(0, 12).map(toEntry);
 
-    // No keyword match — return top-level categories so Claude can navigate
-    const topLevel = all.filter((c) => c.parent_category_id === 0).slice(0, 15);
-    return topLevel.map((c) => ({
+    // No keyword match — return first 15 leaf categories for Claude to pick
+    return leaves.slice(0, 15).map((c) => ({
       ...toEntry(c),
-      name: `${c.category_name ?? "Unknown"} (no match for "${keyword}" — pick a subcategory)`,
+      name: c.name || `Category ${c.category_id}`,
     }));
   }
 
