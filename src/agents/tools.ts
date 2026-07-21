@@ -13,8 +13,8 @@ import { loadState, saveState, formatMoney } from "../routines/shared.js";
 
 // ── Tool schemas (sent to Claude) ─────────────────────────────────────────────
 
-export const TOOL_DEFINITIONS = [
-  // ── Shopee Agent ──
+export const OPERATING_TOOL_DEFS = [
+  // ── Operating Agent (day-to-day shop operations) ──
   {
     name: "get_orders",
     description: "Get orders from the shop. Use status='to_ship' for orders needing action, 'all' for everything recent.",
@@ -150,29 +150,68 @@ export const TOOL_DEFINITIONS = [
     },
   },
 
-  // ── Marketing Agent ──
+] as const;
+
+// Promoting Agent — Shopee-native promotion tools (boost + vouchers)
+export const PROMOTING_TOOL_DEFS = [
   {
-    name: "propose_voucher",
-    description: "Propose creating a discount voucher. Returns a preview — seller must confirm before it's created.",
+    name: "list_products",
+    description: "List the shop's live products with their IDs, price and stock — use this to decide which products to promote/boost.",
     input_schema: {
       type: "object",
       properties: {
-        discount_percent: { type: "number", description: "Discount percentage, e.g. 10 for 10% off" },
-        duration_days: { type: "number", description: "How many days the voucher is valid, e.g. 7" },
-        scope: { type: "string", enum: ["shop", "product"], description: "Shop-wide or specific products. Default: shop" },
-        name: { type: "string", description: "Voucher display name, e.g. 'Weekend Deal'" },
+        limit: { type: "number", description: "How many products to list. Default: 20" },
       },
-      required: ["discount_percent", "duration_days"],
     },
   },
   {
-    name: "generate_ad_copy",
-    description: "Generate social media ad copy for top products (Facebook, Instagram, TikTok, Shopee).",
+    name: "get_shop_performance",
+    description: "Get shop KPIs (sales, orders, rating) to help decide what's worth promoting.",
     input_schema: {
       type: "object",
       properties: {
-        limit: { type: "number", description: "Number of products to generate ads for. Default: 3" },
+        period: { type: "string", enum: ["today", "7d", "30d"], description: "Time period. Default: 7d" },
       },
+    },
+  },
+  {
+    name: "get_vouchers",
+    description: "List existing shop vouchers (upcoming / ongoing / expired).",
+    input_schema: {
+      type: "object",
+      properties: {
+        status: { type: "string", enum: ["upcoming", "ongoing", "expired"], description: "Filter by status." },
+      },
+    },
+  },
+  {
+    name: "boost_listing",
+    description: "Boost a product to the top of Shopee search & category pages for a few hours (free — uses one of the 5 daily boost slots). ONLY call after the seller confirms. SENSITIVE.",
+    input_schema: {
+      type: "object",
+      properties: {
+        product_id: { type: "string", description: "The product ID to boost (from list_products)." },
+        product_name: { type: "string", description: "The product name, for the confirmation message." },
+      },
+      required: ["product_id"],
+    },
+  },
+  {
+    name: "create_voucher",
+    description: "Create a real Shopee discount voucher that buyers can claim. ONLY call after the seller confirms the exact terms. SENSITIVE — creates a live voucher.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Voucher display name, e.g. 'Weekend Deal'." },
+        discount_percent: { type: "number", description: "Percentage off (1-90), e.g. 10 for 10% off. Use this OR discount_amount." },
+        discount_amount: { type: "number", description: "Fixed RM off, e.g. 5 for RM5 off. Use this OR discount_percent." },
+        duration_days: { type: "number", description: "How many days the voucher runs from now. Default: 7." },
+        min_spend: { type: "number", description: "Minimum basket spend in RM to use the voucher. Optional." },
+        usage_limit: { type: "number", description: "Max number of times the voucher can be used. Optional." },
+        scope: { type: "string", enum: ["shop", "product"], description: "Shop-wide or specific products. Default: shop." },
+        product_ids: { type: "array", items: { type: "string" }, description: "Product IDs when scope='product'." },
+      },
+      required: ["name", "duration_days"],
     },
   },
 ] as const;
@@ -304,22 +343,81 @@ export async function executeTool(
       return result.summary;
     }
 
-    case "propose_voucher": {
-      const pct = input.discount_percent as number;
-      const days = input.duration_days as number;
-      const scope = (input.scope as string) ?? "shop";
-      const voucherName = (input.name as string) ?? `${pct}% Off Deal`;
-      const start = new Date();
-      const end = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
-      return [
-        `Voucher preview (not created yet):`,
-        `  Name: ${voucherName}`,
-        `  Discount: ${pct}% off`,
-        `  Scope: ${scope}-wide`,
-        `  Valid: ${start.toLocaleDateString("en-MY")} → ${end.toLocaleDateString("en-MY")} (${days} days)`,
-        ``,
-        `Reply "yes create the voucher" to confirm, or adjust the terms.`,
-      ].join("\n");
+    // ── Promoting Agent tools ──
+    case "list_products": {
+      const limit = (input.limit as number) ?? 20;
+      const page = await adapter.getProducts({ status: "live", limit });
+      if (page.items.length === 0) return "No live products found.";
+      const lines = page.items.map(
+        (p) => `ID ${p.productId} — ${p.name} — ${formatMoney(p.price)} — stock ${p.stock ?? 0}`,
+      );
+      return `${page.items.length} live product(s):\n${lines.join("\n")}`;
+    }
+
+    case "get_vouchers": {
+      const status = input.status as "upcoming" | "ongoing" | "expired" | undefined;
+      const page = await adapter.getVouchers({ status, limit: 20 });
+      if (page.items.length === 0) return "No vouchers found.";
+      const lines = page.items.map((v) => {
+        const d = v.discount.type === "percent" ? `${v.discount.value}% off` : `RM${v.discount.value} off`;
+        return `${v.name} — ${d} — ${v.status}`;
+      });
+      return `${page.items.length} voucher(s):\n${lines.join("\n")}`;
+    }
+
+    case "boost_listing": {
+      const productId = input.product_id as string;
+      const productName = (input.product_name as string) ?? productId;
+      await adapter.boostListing({ productId });
+      audit.record({
+        tool: "boost_listing",
+        tier: "SENSITIVE",
+        effect: `Boosted product ${productId} (${productName}) to top of Shopee search`,
+        decision: "approved",
+        outcome: "executed",
+      });
+      return `Boosted "${productName}" — it's now bumped to the top of Shopee search & category pages for the next few hours.`;
+    }
+
+    case "create_voucher": {
+      const name = input.name as string;
+      const days = (input.duration_days as number) ?? 7;
+      const pct = input.discount_percent as number | undefined;
+      const amt = input.discount_amount as number | undefined;
+      const scope = ((input.scope as string) ?? "shop") as "shop" | "product";
+      const productIds = input.product_ids as string[] | undefined;
+      const minSpend = input.min_spend as number | undefined;
+      const usageLimit = input.usage_limit as number | undefined;
+
+      if (pct == null && amt == null) {
+        return "Please specify either a percentage (discount_percent) or a fixed amount (discount_amount) for the voucher.";
+      }
+      const discount =
+        pct != null
+          ? { type: "percent" as const, value: pct }
+          : { type: "fixed" as const, value: amt! };
+
+      const startAt = new Date().toISOString();
+      const endAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+      const voucher = await adapter.createVoucher({
+        name,
+        discount,
+        startAt,
+        endAt,
+        minSpend: minSpend != null ? { amount: minSpend, currency: "MYR" } : undefined,
+        usageLimit,
+        scope,
+        productIds: scope === "product" ? productIds : undefined,
+      });
+      audit.record({
+        tool: "create_voucher",
+        tier: "SENSITIVE",
+        effect: `Created voucher "${name}" (${pct != null ? `${pct}%` : `RM${amt}`} off, ${days} days)`,
+        decision: "approved",
+        outcome: "executed",
+      });
+      const disc = pct != null ? `${pct}% off` : `RM${amt} off`;
+      return `Voucher created! "${voucher.name}" — ${disc}, valid ${days} days${minSpend ? `, min spend RM${minSpend}` : ""}. Buyers can now claim it.`;
     }
 
     case "upload_product_image": {
@@ -399,22 +497,6 @@ export async function executeTool(
         outcome: "executed",
       });
       return `Listing posted! Product ID: ${product.productId} — "${product.name}" is now live on Shopee.`;
-    }
-
-    case "generate_ad_copy": {
-      const limit = (input.limit as number) ?? 3;
-      const products = await adapter.getProducts({ status: "live", limit });
-      if (products.items.length === 0) return "No live products found to generate ads for.";
-      const lines = [`Ad copy for ${products.items.length} product(s):`];
-      for (const p of products.items) {
-        const price = formatMoney(p.price);
-        lines.push(`\n--- ${p.name} (${price}) ---`);
-        lines.push(`Instagram: ✨ ${p.name} is here! Grab yours for only ${price} 🛍️ Tap link in bio to shop on Shopee! #shopeemalaysia #onlineshopping #deals`);
-        lines.push(`TikTok: POV: You just found the best deal on ${p.name} 🤩 Only ${price} on Shopee! #tiktokmademebuyit #shopee #fyp`);
-        lines.push(`Facebook: 🛍️ ${p.name} — now at just ${price}! Fast shipping across Malaysia. Shop now on Shopee 🛒 #shopeemalaysia #deals`);
-      }
-      lines.push(`\nNote: Run the Sunday ad generator for full AI-generated copy across all products.`);
-      return lines.join("\n");
     }
 
     default:

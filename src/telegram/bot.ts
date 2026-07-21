@@ -9,12 +9,14 @@ import { loadState, saveState, type RoutineState } from "../routines/shared.js";
 
 const HELP_TEXT = `<b>Sellabot Commands</b>
 
-Just talk to me naturally — e.g. "any orders to ship?" or "how are sales this week?"
+Just talk to me naturally — e.g. "any orders to ship?", "how are sales this week?", or "boost my best seller".
 
 To create a Shopee listing: send a photo with a caption like "RM25, wireless earbuds, 50 in stock"
+To promote: "boost the water dispenser" or "make a 10% voucher for this weekend"
 
 Quick commands:
 /status — daemon health &amp; last run times
+/agents — the agents working for you
 /activity — recent agent actions
 /briefing — run morning briefing now
 /report — run evening report now
@@ -178,14 +180,33 @@ export function createTelegramBot(
       await ctx.reply("No agent activity yet.");
       return;
     }
+    const agentLabel: Record<string, string> = {
+      manager: "🧭 Manager",
+      operating: "🛒 Operating",
+      promoting: "📣 Promoting",
+    };
     const lines = ["<b>Recent Agent Activity</b>\n"];
     for (const e of managerAgent.activityLog.slice(0, 15)) {
       const t = localTime(e.ts, tz);
-      const label = e.agent === "shopee" ? "🛒 Shopee" : "📢 Marketing";
+      const label = agentLabel[e.agent] ?? e.agent;
       lines.push(`${label} [${t}] ${e.tool}`);
       if (e.summary) lines.push(`  ${e.summary}`);
     }
     await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+  });
+
+  bot.command("agents", async (ctx) => {
+    await ctx.reply(
+      [
+        "<b>Sellabot Agents</b>\n",
+        "🧭 <b>Manager</b> — talks to you, delegates work to the specialists.",
+        "🛒 <b>Operating</b> — orders, stock, messages, reviews, returns, performance, and creating listings from photos.",
+        "📣 <b>Promoting</b> — boosts listings to the top of Shopee search and creates discount vouchers.",
+        "",
+        "Use /activity to see what each agent has been doing.",
+      ].join("\n"),
+      { parse_mode: "HTML" },
+    );
   });
 
   // Photo → AI listing creation

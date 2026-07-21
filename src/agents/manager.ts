@@ -1,223 +1,164 @@
 /**
- * Manager Agent — the conversational brain of sellabot.
+ * Manager Agent — the conversational coordinator.
  *
- * Receives natural-language messages (from Telegram), uses Claude with tool_use
- * to interpret intent and dispatch to Shopee/Marketing agent tools, then returns
- * a plain-text response for Telegram.
+ * This is the only agent the seller talks to. It interprets intent and
+ * delegates work to two specialists:
+ *   - Operating Agent  → shop operations (orders, stock, messages, listings…)
+ *   - Promoting Agent  → Shopee-native promotion (boost, vouchers)
  *
- * Maintains a per-session conversation history so follow-up messages work
- * ("what about the second one?" etc.).
+ * The Manager keeps a high-level conversation; each specialist keeps its own
+ * detailed history so multi-step flows (photo → draft → confirm) work.
  */
 import { logger } from "../core/logger.js";
 import type { Platform } from "../core/platform.js";
 import type { AuditLog } from "../core/audit.js";
 import type { Config } from "../config.js";
-import { TOOL_DEFINITIONS, executeTool, type ToolContext } from "./tools.js";
+import { OperatingAgent } from "./operating-agent.js";
+import { PromotingAgent } from "./promoting-agent.js";
+import {
+  runAgentLoop,
+  ActivityTracker,
+  type Message,
+  type ActivityEntry,
+} from "./runtime.js";
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// Re-export so existing imports (telegram bot) keep working.
+export type { ActivityEntry } from "./runtime.js";
 
-interface TextBlock   { type: "text"; text: string }
-interface ToolUseBlock { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
-type ContentBlock = TextBlock | ToolUseBlock;
+const MANAGER_TOOLS = [
+  {
+    name: "delegate_to_operations",
+    description:
+      "Delegate a shop-operations task to the Operating Agent: checking orders, stock/inventory, buyer messages, reviews, returns, shop performance, briefings/reports, or creating a product listing. Pass a clear task description including any details the seller gave (price, stock, confirmation, etc.).",
+    input_schema: {
+      type: "object",
+      properties: {
+        task: { type: "string", description: "What the Operating Agent should do, in plain language with all relevant details." },
+      },
+      required: ["task"],
+    },
+  },
+  {
+    name: "delegate_to_promotions",
+    description:
+      "Delegate a promotion/marketing task to the Promoting Agent: boosting a listing to the top of Shopee search, or creating a discount voucher. Pass a clear task description including any details or confirmation from the seller.",
+    input_schema: {
+      type: "object",
+      properties: {
+        task: { type: "string", description: "What the Promoting Agent should do, in plain language with all relevant details." },
+      },
+      required: ["task"],
+    },
+  },
+] as const;
 
-interface AnthropicResponse {
-  stop_reason: "end_turn" | "tool_use" | string;
-  content: ContentBlock[];
-}
+const SYSTEM_PROMPT = `You are Sellabot's Manager Agent — the coordinator a Shopee seller in Malaysia talks to on Telegram.
 
-// Tracks recent actions for /activity command
-export interface ActivityEntry {
-  ts: string;
-  agent: "shopee" | "marketing";
-  tool: string;
-  summary: string;
-}
+You do not do shop work yourself. You have two specialist agents and you delegate to them:
+- Operating Agent (delegate_to_operations): orders, stock/inventory, buyer messages, reviews, returns, shop performance, morning briefing / evening report, and creating product listings from photos.
+- Promoting Agent (delegate_to_promotions): boosting a listing to the top of Shopee search, and creating discount vouchers. (Shopee's paid pay-per-click ads are NOT available via API — the Promoting Agent will explain and offer boost + vouchers instead.)
 
-const SHOPEE_TOOLS = new Set([
-  "get_orders", "get_inventory", "get_low_stock", "get_messages", "get_reviews",
-  "get_returns", "get_shop_performance", "run_briefing", "run_report",
-  "upload_product_image", "search_categories", "draft_listing", "create_listing",
-]);
-
-const SYSTEM_PROMPT = `You are Sellabot, an AI assistant managing a Shopee seller's store in Malaysia.
-
-You have two groups of capabilities:
-- Shopee Agent: check orders, stock, messages, reviews, returns, shop performance, run briefings, create product listings
-- Marketing Agent: propose vouchers, generate ad copy for social media
-
-LISTING CREATION (when seller sends a product photo):
-1. Call upload_product_image to upload the image to Shopee's CDN first.
-2. Analyse the product from the image and the seller's caption — name, features, selling points.
-3. Call search_categories with a broad keyword (e.g. "kitchen", "electronics", "fashion", "baby", "sports", "beauty"). Try the product type, then a broader category if no match. Pick the best category_id from the results.
-4. Call draft_listing with ALL fields: name, description, category_id, category_path, price (from caption), stock (ask if missing), brand, weight_kg, and parcel dimensions (length_cm, width_cm, height_cm).
-   - Brand: read the brand from the product image/caption if visible (e.g. "Cuckoo", "Philips"). If the product has no clear brand, use "No Brand".
-   - Weight & dimensions: ESTIMATE realistic shipping values from the product type. Shopee rejects listings without them. Examples: water dispenser ~12kg, 40x40x120cm; phone case ~0.1kg, 20x15x3cm; t-shirt ~0.3kg, 30x25x3cm. Never leave these blank.
-5. Wait for the seller's explicit yes/confirm/ok.
-6. Call create_listing to post it live — pass the SAME brand, weight and dimensions you showed in the draft.
-
-If upload_product_image fails, tell the user the exact error. Do not keep retrying silently.
-If create_listing fails, report the exact Shopee error to the user — do not retry the same call repeatedly.
-
-Rules:
-- Use tools to fetch real data before answering. Never make up numbers.
-- Be concise — this is Telegram, not email. Keep replies short and scannable.
-- Use plain text only (no markdown **bold** or _italic_ — Telegram plain text mode).
-- For SENSITIVE actions (listing, voucher, replies): always show a preview and ask for confirmation first. Never execute without explicit seller approval.
-- If the seller says "yes", "confirm", "do it", "go ahead", "post it" — check conversation history to understand what they're confirming.
-- If unsure what the seller wants, ask a short clarifying question.`;
-
-// ── Manager Agent ─────────────────────────────────────────────────────────────
+How to work:
+- For anything about the shop's data or listings → delegate_to_operations.
+- For anything about promoting, boosting, ads, discounts or vouchers → delegate_to_promotions.
+- When the seller sent a product photo, delegate to operations with a task describing it (and note the caption/price/stock they gave).
+- When the seller confirms something ("yes", "post it", "boost it", "create it") → delegate to the SAME specialist that made the proposal, telling it the seller confirmed, so it can execute.
+- You may answer directly ONLY for greetings, small talk, or to ask a short clarifying question. Everything operational or promotional goes to a specialist.
+- Relay the specialist's answer to the seller in concise, friendly plain text (no markdown). Do not invent data.`;
 
 export class ManagerAgent {
-  private history: Array<{ role: "user" | "assistant"; content: string | ContentBlock[] }> = [];
-  private readonly maxHistory = 20; // turns (pairs)
-  readonly activityLog: ActivityEntry[] = [];
-  private readonly maxActivityLog = 50;
+  private history: Message[] = [];
+  private readonly maxHistory = 24;
   private pendingImageBase64: string | null = null;
+
+  private readonly tracker = new ActivityTracker();
+  private readonly operating: OperatingAgent;
+  private readonly promoting: PromotingAgent;
 
   constructor(
     private readonly apiKey: string,
     private readonly model: string,
-    private readonly adapter: Platform,
-    private readonly audit: AuditLog,
-    private readonly config: Config,
-  ) {}
+    adapter: Platform,
+    audit: AuditLog,
+    config: Config,
+  ) {
+    this.operating = new OperatingAgent(apiKey, model, adapter, audit, config, this.tracker);
+    this.promoting = new PromotingAgent(apiKey, model, adapter, audit, config, this.tracker);
+  }
 
-  async chatWithImage(userMessage: string, imageBase64: string, mimeType: string): Promise<string> {
-    this.pendingImageBase64 = imageBase64;
-    // Build a multimodal first message
-    const content = [
-      {
-        type: "image" as const,
-        source: { type: "base64" as const, media_type: mimeType as "image/jpeg", data: imageBase64 },
-      },
-      {
-        type: "text" as const,
-        text: userMessage || "I want to list this product on Shopee. Please analyse the photo and help me create a listing.",
-      },
-    ];
-    this.history.push({ role: "user", content: content as unknown as ContentBlock[] });
-    if (this.history.length > this.maxHistory * 2) {
-      this.history = this.history.slice(-this.maxHistory * 2);
-    }
-    try {
-      return await this.runAgentLoop();
-    } catch (err) {
-      logger.error("manager agent error", { error: (err as Error).message });
-      return `Sorry, something went wrong: ${(err as Error).message}`;
-    }
+  /** Recent actions across all agents, newest first (feeds Telegram /activity). */
+  get activityLog(): ActivityEntry[] {
+    return this.tracker.entries;
   }
 
   async chat(userMessage: string): Promise<string> {
-    // Add user message to history
     this.history.push({ role: "user", content: userMessage });
+    this.trim();
+    return this.run();
+  }
 
-    // Trim history to avoid token bloat
-    if (this.history.length > this.maxHistory * 2) {
-      this.history = this.history.slice(-this.maxHistory * 2);
-    }
+  async chatWithImage(userMessage: string, imageBase64: string, _mimeType: string): Promise<string> {
+    // The Manager doesn't need vision — it forwards the image to the Operating
+    // Agent. We stash the bytes and note the photo in the Manager's history.
+    this.pendingImageBase64 = imageBase64;
+    const caption = userMessage?.trim();
+    this.history.push({
+      role: "user",
+      content: `[The seller sent a product photo to list on Shopee.${caption ? ` Caption: "${caption}"` : " No caption."}]`,
+    });
+    this.trim();
+    return this.run();
+  }
 
+  private async run(): Promise<string> {
     try {
-      return await this.runAgentLoop();
+      return await runAgentLoop(
+        {
+          apiKey: this.apiKey,
+          model: this.model,
+          system: SYSTEM_PROMPT,
+          tools: MANAGER_TOOLS,
+          label: "manager agent",
+          executeTool: (name, input) => this.delegate(name, input),
+          onTool: (name, _input, result) => this.tracker.record("manager", name, result),
+        },
+        this.history,
+      );
     } catch (err) {
       logger.error("manager agent error", { error: (err as Error).message });
       return `Sorry, something went wrong: ${(err as Error).message}`;
     }
   }
 
-  private async runAgentLoop(): Promise<string> {
-    let response = await this.callClaude(this.history);
-    let iterations = 0;
-    const maxIterations = 5; // prevent infinite loops
-
-    while (response.stop_reason === "tool_use" && iterations < maxIterations) {
-      iterations++;
-      const toolUses = response.content.filter((b): b is ToolUseBlock => b.type === "tool_use");
-      const toolResults: Array<{ type: "tool_result"; tool_use_id: string; content: string }> = [];
-
-      for (const toolUse of toolUses) {
-        logger.info("manager agent: tool call", { tool: toolUse.name, input: toolUse.input });
-        let result: string;
-        const toolCtx: ToolContext = { pendingImageBase64: this.pendingImageBase64 ?? undefined };
-        try {
-          result = await executeTool(toolUse.name, toolUse.input, this.adapter, this.audit, this.config, toolCtx);
-          // Clear pending image after a successful listing creation
-          if (toolUse.name === "create_listing" && !result.startsWith("Error")) {
-            this.pendingImageBase64 = null;
-          }
-          logger.info("manager agent: tool result", {
-            tool: toolUse.name,
-            hasPendingImage: this.pendingImageBase64 !== null,
-            result: result.slice(0, 300),
-          });
-        } catch (err) {
-          result = `Error: ${(err as Error).message}`;
-          logger.error("manager agent: tool threw", { tool: toolUse.name, error: (err as Error).message });
-        }
-
-        toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: result });
-        this.recordActivity(toolUse.name, result);
-      }
-
-      // Append assistant response + tool results
-      this.history.push({ role: "assistant", content: response.content });
-      this.history.push({ role: "user", content: toolResults as unknown as string });
-
-      response = await this.callClaude(this.history);
+  private async delegate(name: string, input: Record<string, unknown>): Promise<string> {
+    const task = (input.task as string) ?? "";
+    if (name === "delegate_to_operations") {
+      // Hand the pending image to operations once, then clear it here so it
+      // isn't re-sent on later delegations.
+      const image = this.pendingImageBase64 ?? undefined;
+      this.pendingImageBase64 = null;
+      return this.operating.handle(task, image);
     }
-
-    // Extract final text
-    const text = response.content
-      .filter((b): b is TextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join("\n")
-      .trim();
-
-    this.history.push({ role: "assistant", content: text });
-    return text || "Done.";
-  }
-
-  private async callClaude(
-    messages: Array<{ role: "user" | "assistant"; content: string | ContentBlock[] | unknown }>,
-  ): Promise<AnthropicResponse> {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": this.apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: this.model,
-        max_tokens: 1024,
-        system: SYSTEM_PROMPT,
-        tools: TOOL_DEFINITIONS,
-        messages,
-      }),
-    });
-
-    if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`Anthropic API ${res.status}: ${body}`);
+    if (name === "delegate_to_promotions") {
+      return this.promoting.handle(task);
     }
-
-    return res.json() as Promise<AnthropicResponse>;
-  }
-
-  private recordActivity(toolName: string, result: string): void {
-    const agent = SHOPEE_TOOLS.has(toolName) ? "shopee" : "marketing";
-    const summary = result.split("\n")[0]?.slice(0, 100) ?? "";
-    this.activityLog.unshift({ ts: new Date().toISOString(), agent, tool: toolName, summary });
-    if (this.activityLog.length > this.maxActivityLog) {
-      this.activityLog.length = this.maxActivityLog;
-    }
+    return `Unknown delegation: ${name}`;
   }
 
   clearHistory(): void {
     this.history = [];
+    this.pendingImageBase64 = null;
+    this.operating.clearHistory();
+    this.promoting.clearHistory();
   }
 
   get isAvailable(): boolean {
     return !!this.apiKey;
+  }
+
+  private trim(): void {
+    if (this.history.length > this.maxHistory) {
+      this.history = this.history.slice(-this.maxHistory);
+    }
   }
 }
