@@ -48,6 +48,8 @@ export interface CreateListingParams {
   price: Money;
   stock: number;
   images: string[];
+  /** Brand info. Shopee requires this for many categories; id 0 = No Brand. */
+  brand?: { id?: string; name?: string };
   attributes?: Record<string, unknown>;
   weightKg?: number;
   dimensions?: Dimensions;

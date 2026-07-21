@@ -115,6 +115,7 @@ export const TOOL_DEFINITIONS = [
         price: { type: "number", description: "Price in MYR" },
         stock: { type: "number", description: "Initial stock quantity" },
         weight_kg: { type: "number", description: "Product weight in kg (Shopee requires this)" },
+        brand: { type: "string", description: "Brand name (e.g. 'Cuckoo'). Use 'No Brand' if the product has no brand." },
         image_ids: {
           type: "array",
           items: { type: "string" },
@@ -136,6 +137,7 @@ export const TOOL_DEFINITIONS = [
         price: { type: "number", description: "Price in MYR" },
         stock: { type: "number" },
         weight_kg: { type: "number" },
+        brand: { type: "string", description: "Brand name. Use 'No Brand' if none." },
         image_ids: { type: "array", items: { type: "string" } },
       },
       required: ["name", "description", "category_id", "price", "stock", "image_ids"],
@@ -334,11 +336,12 @@ export async function executeTool(
     case "draft_listing": {
       const p = input as {
         name: string; description: string; category_id: string; category_path?: string;
-        price: number; stock: number; weight_kg?: number; image_ids: string[];
+        price: number; stock: number; weight_kg?: number; brand?: string; image_ids: string[];
       };
       const lines = [
         "=== LISTING PREVIEW ===",
         `Name: ${p.name}`,
+        `Brand: ${p.brand || "No Brand"}`,
         `Category: ${p.category_path ?? `ID ${p.category_id}`}`,
         `Price: RM${p.price.toFixed(2)}`,
         `Stock: ${p.stock} unit(s)`,
@@ -357,7 +360,7 @@ export async function executeTool(
     case "create_listing": {
       const p = input as {
         name: string; description: string; category_id: string;
-        price: number; stock: number; weight_kg?: number; image_ids: string[];
+        price: number; stock: number; weight_kg?: number; brand?: string; image_ids: string[];
       };
       const currency = daemonCfg.notifyEmail ? "MYR" : "MYR"; // shop is MY
       const product = await adapter.createListing({
@@ -368,6 +371,7 @@ export async function executeTool(
         stock: p.stock,
         images: p.image_ids,
         weightKg: p.weight_kg,
+        brand: { name: p.brand || "No Brand" },
       });
       audit.record({
         tool: "create_listing",

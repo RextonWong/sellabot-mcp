@@ -160,6 +160,11 @@ export class ShopeeAdapter implements Platform {
         image: { image_id_list: p.images },
         weight: p.weightKg ?? 0.5,
         item_status: "NORMAL",
+        // Shopee requires a brand object for many categories; brand_id 0 = No Brand
+        brand: {
+          brand_id: p.brand?.id ? Number(p.brand.id) : 0,
+          original_brand_name: p.brand?.name || "No Brand",
+        },
         logistics: logisticsList,
         dimension: p.dimensions
           ? {
