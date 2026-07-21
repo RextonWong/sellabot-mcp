@@ -160,6 +160,8 @@ export class ShopeeAdapter implements Platform {
         image: { image_id_list: p.images },
         weight: p.weightKg ?? 0.5,
         item_status: "NORMAL",
+        // Shopee requires order preparation time; 2 days is the standard default
+        days_to_ship: 2,
         // Shopee requires a brand object for many categories; brand_id 0 = No Brand
         brand: {
           brand_id: p.brand?.id ? Number(p.brand.id) : 0,
