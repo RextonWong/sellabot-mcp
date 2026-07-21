@@ -6,7 +6,7 @@
  * Where Shopee needs several calls to assemble one canonical object (e.g. item
  * base info + model list), that stitching happens here.
  */
-import { NotFoundError, UnsupportedOperationError } from "../../core/errors.js";
+import { NotFoundError, UnsupportedOperationError, ValidationError } from "../../core/errors.js";
 import { logger } from "../../core/logger.js";
 import type {
   BulkResult,
@@ -141,13 +141,41 @@ export class ShopeeAdapter implements Platform {
   }
 
   async createListing(p: CreateListingParams): Promise<Product> {
-    // Auto-fetch enabled logistics channels — Shopee requires at least one
+    // Auto-fetch enabled logistics channels — Shopee requires at least one.
+    // The field is logistics_channel_id (NOT logistic_id), and add_item wants
+    // the payload under logistic_info.
     const chRes = await this.client.call<{
-      logistics_channel_list?: Array<{ logistic_id: number; enabled: boolean }>;
+      logistics_channel_list?: Array<{
+        logistics_channel_id?: number;
+        logistic_id?: number;
+        logistics_channel_name?: string;
+        enabled?: boolean;
+        fee_type?: string;
+      }>;
     }>(PATHS.logisticsGetChannelList);
-    const logisticsList = (chRes.logistics_channel_list ?? [])
+
+    const rawChannels = chRes.logistics_channel_list ?? [];
+    logger.info("shopee logistics channels", {
+      total: rawChannels.length,
+      channels: rawChannels
+        .slice(0, 8)
+        .map((c) => ({
+          id: c.logistics_channel_id ?? c.logistic_id,
+          name: c.logistics_channel_name,
+          enabled: c.enabled,
+          fee_type: c.fee_type,
+        })),
+    });
+
+    const logisticInfo = rawChannels
       .filter((c) => c.enabled)
-      .map((c) => ({ logistic_id: c.logistic_id, enabled: true }));
+      .map((c) => ({ logistic_id: c.logistics_channel_id ?? c.logistic_id, enabled: true }));
+
+    if (logisticInfo.length === 0) {
+      throw new ValidationError(
+        "No enabled shipping channel found on this shop. Enable a delivery option in Shopee Seller Centre → Shipping Settings, then try again.",
+      );
+    }
 
     const res = await this.client.call<{ item_id?: number }>(PATHS.productAddItem, {
       method: "POST",
@@ -167,7 +195,7 @@ export class ShopeeAdapter implements Platform {
           brand_id: p.brand?.id ? Number(p.brand.id) : 0,
           original_brand_name: p.brand?.name || "No Brand",
         },
-        logistics: logisticsList,
+        logistic_info: logisticInfo,
         // Shopee requires package dimensions ("Parcel size is required"). Default
         // to a small parcel when the seller doesn't specify.
         dimension: {
