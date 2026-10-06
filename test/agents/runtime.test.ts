@@ -36,7 +36,7 @@ test("Gemini chat uses only the selected provider and keeps conversation context
   assert.match(requests[0].url, /generativelanguage.googleapis.com/);
   assert.equal(requests[0].headers.get("x-goog-api-key"), "fake-test-key");
   assert.equal(requests[0].headers.get("x-api-key"), null);
-  assert.deepEqual(history.at(-1), { role: "assistant", content: "Hello seller" });
+  assert.equal(history.at(-1)?.content, "Hello seller");
 });
 
 test("Gemini tool workflow executes the requested input and returns its result to the model", async (t) => {
@@ -88,4 +88,26 @@ test("Anthropic remains available only when explicitly selected", async (t) => {
   assert.equal(await runAgentLoop({ ...deps, provider: "anthropic" }, [{ role: "user", content: "Hi" }]), "Hello");
   assert.equal(requests[0].url, "https://api.anthropic.com/v1/messages");
   assert.equal(requests[0].headers.get("x-api-key"), "fake-test-key");
+});
+
+test("Gemini signed parts survive tool follow-ups and later conversation turns verbatim", async (t) => {
+  const signedParts = [
+    { text: "internal reasoning", thought: true, thoughtSignature: "opaque-reasoning" },
+    { functionCall: { id: "signed-call", name: "get_stock", args: { product_id: "123" } },
+      thoughtSignature: "opaque-tool-signature" },
+  ];
+  const finalParts = [{ text: "Stock is 4", thoughtSignature: "opaque-answer" }];
+  const requests = mockApi(t, [
+    { candidates: [{ content: { parts: signedParts } }] },
+    { candidates: [{ content: { parts: finalParts } }] },
+    answer("Still 4"),
+  ]);
+  const history: Message[] = [{ role: "user", content: "Check stock" }];
+  assert.equal(await runAgentLoop(deps, history), "Stock is 4");
+  assert.deepEqual(requests[1].body.contents[1].parts, signedParts);
+  assert.equal(requests[1].body.contents[2].parts[0].functionResponse.name, "get_stock");
+  history.push({ role: "user", content: "What was the stock?" });
+  await runAgentLoop(deps, history);
+  assert.deepEqual(requests[2].body.contents[1].parts, signedParts);
+  assert.deepEqual(requests[2].body.contents[3].parts, finalParts);
 });

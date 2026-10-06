@@ -17,6 +17,8 @@ export type ContentBlock = TextBlock | ToolUseBlock;
 export interface Message {
   role: "user" | "assistant";
   content: unknown;
+  /** Preserve Gemini model parts verbatim, including opaque thought signatures. */
+  geminiParts?: GeminiPart[];
 }
 
 export type AgentProvider = "anthropic" | "gemini";
@@ -24,6 +26,7 @@ export type AgentProvider = "anthropic" | "gemini";
 interface AnthropicResponse {
   stop_reason: "end_turn" | "tool_use" | string;
   content: ContentBlock[];
+  geminiParts?: GeminiPart[];
 }
 
 // ── Activity tracking (feeds Telegram /activity) ───────────────────────────────
@@ -91,6 +94,8 @@ async function callClaude(deps: LoopDeps, messages: Message[]): Promise<Anthropi
 }
 
 interface GeminiPart {
+  thoughtSignature?: string;
+  thought?: boolean;
   text?: string;
   inlineData?: { mimeType: string; data: string };
   functionCall?: { id?: string; name: string; args?: Record<string, unknown> };
@@ -123,8 +128,26 @@ function toGeminiTools(tools: readonly unknown[]): Array<{ functionDeclarations:
 
 function toGeminiContents(messages: Message[]): Array<{ role: "user" | "model"; parts: GeminiPart[] }> {
   const toolNames = new Map<string, string>();
+  const syntheticIds = new Set<string>();
 
   return messages.map((message) => {
+    if (message.role === "assistant" && message.geminiParts) {
+      const calls = Array.isArray(message.content)
+        ? (message.content as ContentBlock[]).filter((block): block is ToolUseBlock => block.type === "tool_use")
+        : [];
+      let callIndex = 0;
+      for (const part of message.geminiParts) {
+        if (part.functionCall) {
+          const id = part.functionCall.id ?? calls[callIndex]?.id;
+          if (id) {
+            toolNames.set(id, part.functionCall.name);
+            if (!part.functionCall.id) syntheticIds.add(id);
+          }
+          callIndex++;
+        }
+      }
+      return { role: "model", parts: message.geminiParts };
+    }
     if (typeof message.content === "string") {
       return { role: message.role === "assistant" ? "model" : "user", parts: [{ text: message.content }] };
     }
@@ -156,7 +179,7 @@ function toGeminiContents(messages: Message[]): Array<{ role: "user" | "model"; 
         if (id && name) {
           parts.push({
             functionResponse: {
-              id,
+              ...(syntheticIds.has(id) ? {} : { id }),
               name,
               response: { result: String(block.content ?? "") },
             },
@@ -193,6 +216,7 @@ async function callGemini(deps: LoopDeps, messages: Message[]): Promise<Anthropi
   if (data.error?.message) throw new Error(`Gemini API error: ${data.error.message}`);
   const parts = data.candidates?.[0]?.content?.parts ?? [];
   const content: ContentBlock[] = parts.flatMap<ContentBlock>((part) => {
+    if (part.thought) return [];
     if (part.text) return [{ type: "text" as const, text: part.text }];
     if (part.functionCall) {
       return [{
@@ -208,6 +232,7 @@ async function callGemini(deps: LoopDeps, messages: Message[]): Promise<Anthropi
   return {
     stop_reason: content.some((block) => block.type === "tool_use") ? "tool_use" : "end_turn",
     content,
+    geminiParts: parts,
   };
 }
 
@@ -243,7 +268,9 @@ export async function runAgentLoop(deps: LoopDeps, history: Message[]): Promise<
       deps.onTool?.(toolUse.name, toolUse.input, result);
     }
 
-    history.push({ role: "assistant", content: response.content });
+    history.push({ role: "assistant", content: response.content,
+      ...(response.geminiParts ? { geminiParts: response.geminiParts } : {}),
+    });
     history.push({ role: "user", content: toolResults });
     response = await callModel(deps, history);
   }
@@ -254,6 +281,8 @@ export async function runAgentLoop(deps: LoopDeps, history: Message[]): Promise<
     .join("\n")
     .trim();
 
-  history.push({ role: "assistant", content: text });
+  history.push({ role: "assistant", content: text,
+    ...(response.geminiParts ? { geminiParts: response.geminiParts } : {}),
+  });
   return text || "Done.";
 }
