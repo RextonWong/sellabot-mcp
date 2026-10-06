@@ -21,6 +21,7 @@ import {
   ActivityTracker,
   type Message,
   type ActivityEntry,
+  type AgentProvider,
 } from "./runtime.js";
 
 // Re-export so existing imports (telegram bot) keep working.
@@ -133,13 +134,14 @@ export class ManagerAgent {
 
   constructor(
     private readonly apiKey: string,
+    private readonly provider: AgentProvider,
     private readonly model: string,
     adapter: Platform,
     audit: AuditLog,
     config: Config,
   ) {
-    this.operating = new OperatingAgent(apiKey, model, adapter, audit, config, this.tracker);
-    this.promoting = new PromotingAgent(apiKey, model, adapter, audit, config, this.tracker);
+    this.operating = new OperatingAgent(apiKey, provider, model, adapter, audit, config, this.tracker);
+    this.promoting = new PromotingAgent(apiKey, provider, model, adapter, audit, config, this.tracker);
   }
 
   /** Wire the scheduler after construction (avoids a constructor cycle). */
@@ -187,6 +189,7 @@ export class ManagerAgent {
       return await runAgentLoop(
         {
           apiKey: this.apiKey,
+          provider: this.provider,
           model: this.model,
           system: SYSTEM_PROMPT,
           tools: MANAGER_TOOLS,

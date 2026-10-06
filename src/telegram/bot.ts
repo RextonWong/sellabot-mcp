@@ -199,7 +199,7 @@ export function createTelegramBot(
 
   bot.command("schedules", async (ctx) => {
     if (!managerAgent) {
-      await ctx.reply("Scheduling needs the Manager Agent (set ANTHROPIC_API_KEY).");
+      await ctx.reply("Scheduling needs the Manager Agent (set the configured AI provider API key).");
       return;
     }
     const tasks = managerAgent.listSchedules();
@@ -235,7 +235,7 @@ export function createTelegramBot(
   // Photo → AI listing creation
   bot.on("message:photo", async (ctx) => {
     if (!managerAgent) {
-      await ctx.reply("Set ANTHROPIC_API_KEY to enable AI product listing from photos.");
+      await ctx.reply("Set the configured AI provider API key to enable AI product listing from photos.");
       return;
     }
     const photo = ctx.message.photo.at(-1)!; // largest available size
@@ -267,7 +267,7 @@ export function createTelegramBot(
   // Free-text → Manager Agent (if available) or fallback message
   bot.on("message:text", async (ctx) => {
     if (!managerAgent) {
-      await ctx.reply("Use /help to see available commands. (Set ANTHROPIC_API_KEY to enable free-text chat.)");
+      await ctx.reply("Use /help to see available commands. (Set the configured AI provider API key to enable free-text chat.)");
       return;
     }
     const userText = ctx.message.text;

@@ -21,7 +21,10 @@ const boolish = z
   .transform((v) => v?.toLowerCase() === "true");
 
 const ConfigSchema = z.object({
-  anthropicApiKey: z.string().optional(),
+  ai: z.object({
+    provider: z.enum(["anthropic", "gemini"]),
+    apiKey: z.string().optional(),
+  }),
   shopee: z.object({
     partnerId: z.string().min(1, "SHOPEE_PARTNER_ID is required"),
     partnerKey: z.string().min(1, "SHOPEE_PARTNER_KEY is required"),
@@ -93,7 +96,13 @@ export function loadConfig(): Config {
   if (cached) return cached;
 
   const raw = {
-    anthropicApiKey: process.env.ANTHROPIC_API_KEY || undefined,
+    ai: {
+      provider: process.env.AGENT_PROVIDER ?? "anthropic",
+      apiKey:
+        process.env.AGENT_PROVIDER === "gemini"
+          ? process.env.GEMINI_API_KEY || undefined
+          : process.env.ANTHROPIC_API_KEY || undefined,
+    },
     shopee: {
       partnerId: process.env.SHOPEE_PARTNER_ID ?? "",
       partnerKey: process.env.SHOPEE_PARTNER_KEY ?? "",

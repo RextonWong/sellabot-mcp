@@ -1,5 +1,5 @@
 /**
- * Shared agent runtime — the Claude tool-use loop used by all three agents
+ * Shared agent runtime — the tool-use loop used by all three agents.
  * (Manager, Operating, Promoting) plus a shared activity tracker.
  *
  * Each agent owns its own conversation history and tool set; this module holds
@@ -18,6 +18,8 @@ export interface Message {
   role: "user" | "assistant";
   content: unknown;
 }
+
+export type AgentProvider = "anthropic" | "gemini";
 
 interface AnthropicResponse {
   stop_reason: "end_turn" | "tool_use" | string;
@@ -49,6 +51,7 @@ export class ActivityTracker {
 // ── The loop ───────────────────────────────────────────────────────────────────
 
 export interface LoopDeps {
+  provider: AgentProvider;
   apiKey: string;
   model: string;
   system: string;
@@ -87,12 +90,137 @@ async function callClaude(deps: LoopDeps, messages: Message[]): Promise<Anthropi
   return res.json() as Promise<AnthropicResponse>;
 }
 
+interface GeminiPart {
+  text?: string;
+  inlineData?: { mimeType: string; data: string };
+  functionCall?: { id?: string; name: string; args?: Record<string, unknown> };
+  functionResponse?: { id?: string; name: string; response: Record<string, unknown> };
+}
+
+interface GeminiResponse {
+  candidates?: Array<{
+    content?: { parts?: GeminiPart[] };
+  }>;
+  error?: { message?: string };
+}
+
+function toGeminiTools(tools: readonly unknown[]): Array<{ functionDeclarations: unknown[] }> {
+  return [{
+    functionDeclarations: tools.map((tool) => {
+      const definition = tool as {
+        name: string;
+        description?: string;
+        input_schema?: unknown;
+      };
+      return {
+        name: definition.name,
+        description: definition.description,
+        parameters: definition.input_schema ?? { type: "object", properties: {} },
+      };
+    }),
+  }];
+}
+
+function toGeminiContents(messages: Message[]): Array<{ role: "user" | "model"; parts: GeminiPart[] }> {
+  const toolNames = new Map<string, string>();
+
+  return messages.map((message) => {
+    if (typeof message.content === "string") {
+      return { role: message.role === "assistant" ? "model" : "user", parts: [{ text: message.content }] };
+    }
+
+    const blocks = Array.isArray(message.content) ? message.content : [];
+    const parts: GeminiPart[] = [];
+    for (const block of blocks as Array<Record<string, unknown>>) {
+      if (block.type === "text" && typeof block.text === "string") {
+        parts.push({ text: block.text });
+      } else if (block.type === "image") {
+        const source = block.source as { type?: string; media_type?: string; data?: string } | undefined;
+        if (source?.type === "base64" && source.data) {
+          parts.push({ inlineData: { mimeType: source.media_type ?? "image/jpeg", data: source.data } });
+        }
+      } else if (block.type === "tool_use") {
+        const id = typeof block.id === "string" ? block.id : crypto.randomUUID();
+        const name = String(block.name ?? "");
+        toolNames.set(id, name);
+        parts.push({
+          functionCall: {
+            id,
+            name,
+            args: (block.input as Record<string, unknown>) ?? {},
+          },
+        });
+      } else if (block.type === "tool_result") {
+        const id = typeof block.tool_use_id === "string" ? block.tool_use_id : undefined;
+        const name = id ? toolNames.get(id) : undefined;
+        if (id && name) {
+          parts.push({
+            functionResponse: {
+              id,
+              name,
+              response: { result: String(block.content ?? "") },
+            },
+          });
+        }
+      }
+    }
+    return { role: message.role === "assistant" ? "model" : "user", parts };
+  });
+}
+
+async function callGemini(deps: LoopDeps, messages: Message[]): Promise<AnthropicResponse> {
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(deps.model)}:generateContent`;
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": deps.apiKey,
+    },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: deps.system }] },
+      contents: toGeminiContents(messages),
+      tools: toGeminiTools(deps.tools),
+      generationConfig: { maxOutputTokens: deps.maxTokens ?? 1024 },
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Gemini API ${res.status}: ${body}`);
+  }
+
+  const data = await res.json() as GeminiResponse;
+  if (data.error?.message) throw new Error(`Gemini API error: ${data.error.message}`);
+  const parts = data.candidates?.[0]?.content?.parts ?? [];
+  const content: ContentBlock[] = parts.flatMap<ContentBlock>((part) => {
+    if (part.text) return [{ type: "text" as const, text: part.text }];
+    if (part.functionCall) {
+      return [{
+        type: "tool_use" as const,
+        id: part.functionCall.id ?? crypto.randomUUID(),
+        name: part.functionCall.name,
+        input: part.functionCall.args ?? {},
+      }];
+    }
+    return [];
+  });
+
+  return {
+    stop_reason: content.some((block) => block.type === "tool_use") ? "tool_use" : "end_turn",
+    content,
+  };
+}
+
+function callModel(deps: LoopDeps, messages: Message[]): Promise<AnthropicResponse> {
+  return deps.provider === "gemini" ? callGemini(deps, messages) : callClaude(deps, messages);
+}
+
 /**
  * Runs the agentic loop against `history` (mutated in place), executing tools
  * until Claude stops calling them. Returns the final assistant text.
  */
 export async function runAgentLoop(deps: LoopDeps, history: Message[]): Promise<string> {
-  let response = await callClaude(deps, history);
+  let response = await callModel(deps, history);
   let iterations = 0;
   const maxIterations = deps.maxIterations ?? 6;
 
@@ -117,7 +245,7 @@ export async function runAgentLoop(deps: LoopDeps, history: Message[]): Promise<
 
     history.push({ role: "assistant", content: response.content });
     history.push({ role: "user", content: toolResults });
-    response = await callClaude(deps, history);
+    response = await callModel(deps, history);
   }
 
   const text = response.content

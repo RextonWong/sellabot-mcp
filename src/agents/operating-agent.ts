@@ -12,7 +12,7 @@ import type { Platform } from "../core/platform.js";
 import type { AuditLog } from "../core/audit.js";
 import type { Config } from "../config.js";
 import { OPERATING_TOOL_DEFS, executeTool, type ToolContext } from "./tools.js";
-import { runAgentLoop, type Message, type ActivityTracker } from "./runtime.js";
+import { runAgentLoop, type Message, type ActivityTracker, type AgentProvider } from "./runtime.js";
 
 const SYSTEM_PROMPT = `You are the Operating Agent for a Shopee seller's store in Malaysia.
 You handle day-to-day shop operations: orders, stock/inventory, buyer messages, reviews, returns, shop performance, and creating new product listings.
@@ -40,6 +40,7 @@ export class OperatingAgent {
 
   constructor(
     private readonly apiKey: string,
+    private readonly provider: AgentProvider,
     private readonly model: string,
     private readonly adapter: Platform,
     private readonly audit: AuditLog,
@@ -78,6 +79,7 @@ export class OperatingAgent {
     return runAgentLoop(
       {
         apiKey: this.apiKey,
+        provider: this.provider,
         model: this.model,
         system: SYSTEM_PROMPT,
         tools: OPERATING_TOOL_DEFS,

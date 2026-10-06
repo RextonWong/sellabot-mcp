@@ -148,7 +148,11 @@ cron.schedule("0 1 * * 0", () => {
       logger.info("running weekly ad generator");
       const { result } = await runAdGenerator(adapter, {
         limit: daemonCfg.adProductsLimit,
-        anthropicApiKey: config.anthropicApiKey,
+        ai: {
+          provider: config.ai.provider,
+          apiKey: config.ai.apiKey,
+          model: agentModel,
+        },
         instagramClient,
         autoPostInstagram: daemonCfg.autoPostInstagram,
       });
@@ -160,10 +164,12 @@ cron.schedule("0 1 * * 0", () => {
 
 // ── Manager Agent + Telegram bot ─────────────────────────────────────────────
 
-const agentModel = process.env.AGENT_MODEL ?? "claude-sonnet-5";
-const managerAgent = config.anthropicApiKey
+const agentModel = process.env.AGENT_MODEL
+  ?? (config.ai.provider === "gemini" ? "gemini-3.8-flash" : "claude-sonnet-5");
+const managerAgent = config.ai.apiKey
   ? new ManagerAgent(
-      config.anthropicApiKey,
+      config.ai.apiKey,
+      config.ai.provider,
       agentModel,
       adapter,
       audit,
@@ -172,7 +178,7 @@ const managerAgent = config.anthropicApiKey
   : undefined;
 
 if (managerAgent) {
-  logger.info("manager agent ready", { model: agentModel });
+  logger.info("manager agent ready", { provider: config.ai.provider, model: agentModel });
 }
 
 // User-defined recurring tasks (e.g. "boost these products every day").
@@ -205,7 +211,7 @@ if (daemonCfg.telegramBotToken && daemonCfg.telegramChatId) {
 
 // ── Startup ───────────────────────────────────────────────────────────────────
 
-const adMode = config.anthropicApiKey ? "AI (Claude Haiku)" : "templates";
+const adMode = config.ai.apiKey ? `AI (${config.ai.provider})` : "templates";
 console.error(`
 ╔══════════════════════════════════════════════╗
 ║         SELLABOT DAEMON — RUNNING           ║
@@ -214,7 +220,7 @@ console.error(`
 ║  Email:     ${daemonCfg.notifyEmail.padEnd(32)}║
 ║  Push:      ${(daemonCfg.ntfyTopic ? `ntfy.sh/${daemonCfg.ntfyTopic}` : "disabled").padEnd(32)}║
 ║  Telegram:  ${(daemonCfg.telegramBotToken ? "enabled" : "disabled").padEnd(32)}║
-║  Manager Agent: ${(managerAgent ? `ON — ${agentModel}` : "OFF — set ANTHROPIC_API_KEY").padEnd(28)}║
+║  Manager Agent: ${(managerAgent ? `ON — ${agentModel}` : "OFF — set AI API key").padEnd(28)}║
 ╠══════════════════════════════════════════════╣
 ║  PHASE 2                                    ║
 ║  Auto-reply reviews:  ${(daemonCfg.autoReplyReviews ? "ON" : "OFF").padEnd(22)}║

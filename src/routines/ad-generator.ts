@@ -60,21 +60,21 @@ function fill(template: string, product: Product): string {
   return template.replace(/\{name\}/g, product.name).replace(/\{price\}/g, price);
 }
 
-// ── Claude API (uses native fetch, no SDK needed) ─────────────────────────────
+// ── AI copy generation (uses native fetch, no SDK needed) ────────────────────
 
-interface ClaudeAdCopy {
+interface AiAdCopy {
   shopee: string;
   facebook: string;
   instagram: string;
   tiktok: string;
 }
 
-async function generateWithClaude(product: Product, apiKey: string): Promise<ClaudeAdCopy> {
+function adPrompt(product: Product): string {
   const price = product.price
     ? `${product.price.currency} ${product.price.amount.toFixed(2)}`
     : "contact for price";
 
-  const prompt = `You are a social media marketing expert for a Malaysian Shopee seller. Generate ad copy for this product:
+  return `You are a social media marketing expert for a Malaysian Shopee seller. Generate ad copy for this product:
 
 Product: ${product.name}
 Price: ${price}
@@ -87,6 +87,10 @@ Write 4 pieces of ad copy and respond with valid JSON only (no markdown, no expl
   "instagram": "Short caption: 2-3 lines max, ends with exactly 10 relevant hashtags for Malaysian market",
   "tiktok": "TikTok caption: trending hook + 3 bullet points + 10 viral hashtags, casual Gen-Z/millennial tone"
 }`;
+}
+
+async function generateWithAnthropic(product: Product, apiKey: string): Promise<AiAdCopy> {
+  const prompt = adPrompt(product);
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -109,20 +113,60 @@ Write 4 pieces of ad copy and respond with valid JSON only (no markdown, no expl
   const data = (await response.json()) as { content: Array<{ type: string; text?: string }> };
   const text = data.content[0]?.type === "text" ? (data.content[0].text ?? "{}") : "{}";
   const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error("No JSON found in Claude response");
+  if (!jsonMatch) throw new Error("No JSON found in Anthropic response");
 
-  return JSON.parse(jsonMatch[0]) as ClaudeAdCopy;
+  return JSON.parse(jsonMatch[0]) as AiAdCopy;
+}
+
+async function generateWithGemini(product: Product, apiKey: string, model: string): Promise<AiAdCopy> {
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: adPrompt(product) }] }],
+        generationConfig: {
+          maxOutputTokens: 1024,
+          responseMimeType: "application/json",
+        },
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(`Gemini API ${response.status}: ${await response.text()}`);
+  }
+
+  const data = await response.json() as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  };
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error("No JSON found in Gemini response");
+  return JSON.parse(text) as AiAdCopy;
 }
 
 // ── Main generator ─────────────────────────────────────────────────────────────
 
-async function generateAdCopy(product: Product, anthropicApiKey?: string): Promise<ClaudeAdCopy> {
-  if (anthropicApiKey) {
+interface AiSettings {
+  provider: "anthropic" | "gemini";
+  apiKey?: string;
+  model: string;
+}
+
+async function generateAdCopy(product: Product, ai: AiSettings): Promise<AiAdCopy> {
+  if (ai.apiKey) {
     try {
-      return await generateWithClaude(product, anthropicApiKey);
+      return ai.provider === "gemini"
+        ? await generateWithGemini(product, ai.apiKey, ai.model)
+        : await generateWithAnthropic(product, ai.apiKey);
     } catch (err) {
-      logger.warn("Claude ad generation failed, falling back to templates", {
+      logger.warn("AI ad generation failed, falling back to templates", {
         product: product.name,
+        provider: ai.provider,
         error: (err as Error).message,
       });
     }
@@ -139,17 +183,17 @@ export async function runAdGenerator(
   adapter: Platform,
   opts: {
     limit: number;
-    anthropicApiKey?: string;
+    ai: AiSettings;
     instagramClient?: InstagramClient;
     autoPostInstagram?: boolean;
   },
 ): Promise<{ copies: AdCopySet[]; result: RoutineResult }> {
   const products = await adapter.getProducts({ status: "live", limit: opts.limit });
-  const mode = opts.anthropicApiKey ? "AI-generated (Claude Haiku)" : "template-based";
+  const mode = opts.ai.apiKey ? `AI-generated (${opts.ai.provider})` : "template-based";
   const copies: AdCopySet[] = [];
 
   for (const product of products.items) {
-    const copy = await generateAdCopy(product, opts.anthropicApiKey);
+    const copy = await generateAdCopy(product, opts.ai);
     copies.push({
       productId: product.productId,
       productName: product.name,

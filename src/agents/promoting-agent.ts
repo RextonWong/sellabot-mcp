@@ -9,7 +9,7 @@ import type { Platform } from "../core/platform.js";
 import type { AuditLog } from "../core/audit.js";
 import type { Config } from "../config.js";
 import { PROMOTING_TOOL_DEFS, executeTool } from "./tools.js";
-import { runAgentLoop, type Message, type ActivityTracker } from "./runtime.js";
+import { runAgentLoop, type Message, type ActivityTracker, type AgentProvider } from "./runtime.js";
 
 const SYSTEM_PROMPT = `You are the Promoting Agent for a Shopee seller's store in Malaysia.
 Your job is to grow sales using Shopee's OWN in-app promotion levers. You receive tasks from the Manager Agent and reply in concise plain text (no markdown).
@@ -35,6 +35,7 @@ export class PromotingAgent {
 
   constructor(
     private readonly apiKey: string,
+    private readonly provider: AgentProvider,
     private readonly model: string,
     private readonly adapter: Platform,
     private readonly audit: AuditLog,
@@ -57,6 +58,7 @@ export class PromotingAgent {
     return runAgentLoop(
       {
         apiKey: this.apiKey,
+        provider: this.provider,
         model: this.model,
         system: SYSTEM_PROMPT,
         tools: PROMOTING_TOOL_DEFS,

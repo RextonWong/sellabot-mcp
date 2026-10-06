@@ -72,7 +72,12 @@ async function main() {
     console.log("Running weekly ad generator...\n");
     const { result } = await runAdGenerator(adapter, {
       limit: d.adProductsLimit,
-      anthropicApiKey: config.anthropicApiKey,
+      ai: {
+        provider: config.ai.provider,
+        apiKey: config.ai.apiKey,
+        model: process.env.AGENT_MODEL
+          ?? (config.ai.provider === "gemini" ? "gemini-3.8-flash" : "claude-sonnet-5"),
+      },
     });
     console.log(result.summary);
     console.log("\n--- Sending notifications ---");
