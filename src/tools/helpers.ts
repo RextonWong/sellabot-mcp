@@ -29,6 +29,8 @@ export interface ToolContext {
   config: Config;
 }
 
+type ToolArgs<Shape extends ZodRawShape> = z.output<z.ZodObject<Shape>>;
+
 const platformShape = {
   platform: z
     .enum(["shopee", "lazada", "tiktok"])
@@ -109,7 +111,7 @@ export function readTool<S extends ZodRawShape>(
     description: string;
     schema?: S;
     capability?: Capability;
-    handler: (args: z.objectOutputType<S, z.ZodTypeAny>, platform: Platform) => Promise<unknown>;
+    handler: (args: ToolArgs<S>, platform: Platform) => Promise<unknown>;
   },
 ) {
   const inputSchema = { ...platformShape, ...(def.schema ?? {}) } as ZodRawShape;
@@ -125,7 +127,7 @@ export function readTool<S extends ZodRawShape>(
       try {
         const platform = resolvePlatform(ctx, args);
         assertCapability(platform, def.capability, def.name);
-        const value = await def.handler(args as z.objectOutputType<S, z.ZodTypeAny>, platform);
+        const value = await def.handler(args as ToolArgs<S>, platform);
         return jsonContent(value);
       } catch (err) {
         return errorToContent(err);
@@ -144,8 +146,8 @@ export function mutationTool<S extends ZodRawShape>(
     schema: S;
     capability?: Capability;
     /** Concrete, human-readable description of the effect, for the consent prompt. */
-    effect: (args: z.objectOutputType<S, z.ZodTypeAny>) => string;
-    handler: (args: z.objectOutputType<S, z.ZodTypeAny>, platform: Platform) => Promise<unknown>;
+    effect: (args: ToolArgs<S>) => string;
+    handler: (args: ToolArgs<S>, platform: Platform) => Promise<unknown>;
   },
 ) {
   // In read-only mode, mutating tools are simply not registered.
@@ -172,7 +174,7 @@ export function mutationTool<S extends ZodRawShape>(
       try {
         const platform = resolvePlatform(ctx, args);
         assertCapability(platform, def.capability, def.name);
-        const typed = args as z.objectOutputType<S, z.ZodTypeAny> & {
+        const typed = args as ToolArgs<S> & {
           confirmation_token?: string;
         };
         const effect = def.effect(typed);
